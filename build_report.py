@@ -44,6 +44,10 @@ MATURITY_BUCKETS = [
 ]
 BUCKET_LABELS = [b[0] for b in MATURITY_BUCKETS]
 
+# Earliest date TreasuryDirect's structured auction records go back to -- also
+# where the "Show history" sparklines start (see historical_snapshots below).
+HISTORY_START = date(1980, 1, 1)
+
 
 def bucket_for_days(days):
     for label, lo, hi in MATURITY_BUCKETS:
@@ -111,12 +115,71 @@ def iso_date(value):
     return None if pd.isna(value) else value.strftime("%Y-%m-%d")
 
 
+def month_start_dates(start, end):
+    """First-of-month timestamps from `start` through `end`, inclusive."""
+    return list(pd.date_range(start=pd.Timestamp(start), end=pd.Timestamp(end), freq="MS"))
+
+
+def historical_snapshots(df, dates):
+    """Point-in-time replay of the five headline metrics.
+
+    For each date D, use only securities issued by then (issue_date <= D)
+    that hadn't yet matured as of D (maturity_date > D) -- i.e. exactly what
+    this dashboard would have shown on D, using the same definitions as the
+    live summary tiles. Each security's own effective_rate_pct never changes
+    (it's fixed at auction); only which securities are "outstanding as of D"
+    and their years-to-maturity as of D change per snapshot.
+    """
+    history = {
+        "dates": [], "total_outstanding": [], "weighted_avg_rate_pct": [], "annual_interest_cost": [],
+        "weighted_avg_maturity_years": [], "amount_maturing_12mo": [],
+        "pct_maturing_12mo": [], "amount_maturing_90d": [], "pct_maturing_90d": [],
+    }
+    for d in dates:
+        snap = df[(df["issue_date"] <= d) & (df["maturity_date"] > d)]
+        total = float(snap["total_accepted"].sum())
+        history["dates"].append(d.strftime("%Y-%m-%d"))
+        history["total_outstanding"].append(round(total, 0))
+        if total <= 0:
+            history["weighted_avg_rate_pct"].append(None)
+            history["annual_interest_cost"].append(0.0)
+            history["weighted_avg_maturity_years"].append(None)
+            history["amount_maturing_12mo"].append(0.0)
+            history["pct_maturing_12mo"].append(None)
+            history["amount_maturing_90d"].append(0.0)
+            history["pct_maturing_90d"].append(None)
+            continue
+
+        days_to_mat = (snap["maturity_date"] - d).dt.days
+        years_to_mat = days_to_mat / 365.25
+        w_rate = weighted_avg(snap["total_accepted"], snap["effective_rate_pct"])
+        annual_interest = float((snap["total_accepted"] * snap["effective_rate_pct"]).sum() / 100)
+        w_mat = float((snap["total_accepted"] * years_to_mat).sum() / total)
+        amt_12mo = float(snap.loc[days_to_mat <= 365, "total_accepted"].sum())
+        amt_90d = float(snap.loc[days_to_mat <= 90, "total_accepted"].sum())
+
+        history["weighted_avg_rate_pct"].append(round(w_rate, 3) if w_rate is not None else None)
+        history["annual_interest_cost"].append(round(annual_interest, 0))
+        history["weighted_avg_maturity_years"].append(round(w_mat, 2))
+        history["amount_maturing_12mo"].append(round(amt_12mo, 0))
+        history["pct_maturing_12mo"].append(round(amt_12mo / total * 100, 2))
+        history["amount_maturing_90d"].append(round(amt_90d, 0))
+        history["pct_maturing_90d"].append(round(amt_90d / total * 100, 2))
+
+    return history
+
+
 def main():
     df = load_auctions()
     df["effective_rate_pct"] = compute_effective_rate(df)
 
-    today = pd.Timestamp(date.today())
-    outstanding = df[df["maturity_date"] > today].copy()
+    today_date = date.today()
+    today = pd.Timestamp(today_date)
+    # issue_date <= today matches historical_snapshots' definition of
+    # "outstanding as of D" exactly, so the live tiles and the point-in-time
+    # history line up (a security auctioned but not yet issued isn't counted
+    # as outstanding debt yet either way).
+    outstanding = df[(df["issue_date"] <= today) & (df["maturity_date"] > today)].copy()
     outstanding["days_to_maturity"] = (outstanding["maturity_date"] - today).dt.days
     outstanding["years_to_maturity"] = outstanding["days_to_maturity"] / 365.25
     outstanding["bucket"] = outstanding["days_to_maturity"].apply(bucket_for_days)
@@ -136,6 +199,7 @@ def main():
     amount_maturing_90d = float(
         outstanding.loc[outstanding["days_to_maturity"] <= 90, "total_accepted"].sum()
     )
+    pct_maturing_90d = amount_maturing_90d / total_outstanding * 100
 
     # ---- maturity wall: $ outstanding per bucket, split by type ----
     wall_pivot = outstanding.pivot_table(
@@ -154,6 +218,12 @@ def main():
         round(float(wr / w), 3) if w else None
         for w, wr in zip(bucket_rates["w"], bucket_rates["wr"])
     ]
+
+    # Annual interest cost implied by currently outstanding debt at its own
+    # rates -- sum(face value x rate) over the same rated rows weighted_avg_rate
+    # uses, not total_outstanding x weighted_avg_rate (that would silently
+    # misstate things if any outstanding row ever lacks a rate).
+    annual_interest_cost = float(outstanding["_rate_component"].sum() / 100)
 
     # ---- composition: total $ outstanding by type ----
     composition_amounts = (
@@ -212,6 +282,10 @@ def main():
         rate_component=("_rate_component2", "sum"),
     )
     top_grp["rate_pct"] = top_grp["rate_component"] / top_grp["rate_weight"]
+    # Purely hypothetical "if this exact tranche were refinanced today at the
+    # same term" rate -- the most recent auction of that same term, same
+    # lookup used for the aggregate refinancing-cost-impact section above.
+    top_grp["refi_rate_pct"] = top_grp["term"].map(latest_rate_by_term)
     top_grp = top_grp.sort_values("amount", ascending=False).head(20)
     top_maturities = [
         {
@@ -221,9 +295,16 @@ def main():
             "maturity_date": iso_date(row.maturity_date),
             "amount": float(row.amount),
             "rate_pct": round(float(row.rate_pct), 3) if pd.notna(row.rate_pct) else None,
+            "refi_rate_pct": round(float(row.refi_rate_pct), 3) if pd.notna(row.refi_rate_pct) else None,
         }
         for row in top_grp.itertuples()
     ]
+
+    # ---- point-in-time history for the "Show history" tile sparklines ----
+    hist_dates = month_start_dates(HISTORY_START, today_date.replace(day=1))
+    if hist_dates[-1] != today:
+        hist_dates.append(today)
+    history = historical_snapshots(df, hist_dates)
 
     data = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -235,10 +316,14 @@ def main():
         "summary": {
             "total_outstanding": total_outstanding,
             "weighted_avg_rate_pct": round(weighted_avg_rate, 3) if weighted_avg_rate is not None else None,
+            "annual_interest_cost": annual_interest_cost,
             "weighted_avg_maturity_years": round(weighted_avg_maturity, 2),
+            "amount_maturing_12mo": total_maturing_12mo,
             "pct_maturing_12mo": round(pct_maturing_12mo, 2),
             "amount_maturing_90d": amount_maturing_90d,
+            "pct_maturing_90d": round(pct_maturing_90d, 2),
         },
+        "history": history,
         "maturity_wall": {
             "buckets": BUCKET_LABELS,
             "by_type": by_type_amounts,
@@ -284,6 +369,12 @@ def main():
             "auction of the same term — a simplified proxy, not an official Treasury estimate. Covers "
             f"{coverage_pct:.1f}% of debt maturing in the next 12 months (the rest has no directly comparable "
             "recent auction of the same term).",
+            "The “Refi. rate” column on the maturities table is the same kind of hypothetical, applied per "
+            "tranche: what a new auction of that same term is yielding today, not a prediction of what will "
+            "actually happen when that security is refinanced.",
+            "The “Show history” sparklines replay each metric using only securities issued by that date. "
+            "History before roughly 2010 understates totals slightly, since debt issued before 1980 (when "
+            "this dataset starts) that was still outstanding in the 1980s–2000s isn't captured.",
         ],
     }
 

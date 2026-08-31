@@ -164,7 +164,14 @@ def load_workbook_state():
     header_row = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))] if ws.max_row >= 1 else []
 
     if not header_row or all(v is None for v in header_row):
-        ws.append(EXPECTED_HEADERS)
+        # Write directly to row 1 rather than ws.append(): a brand-new
+        # in-memory Workbook() reports max_row == 1 before anything has
+        # been written to it, so append() (which always targets
+        # max_row + 1) would land the header row on row 2 and leave row 1
+        # permanently blank -- silently corrupting the sheet for every
+        # downstream reader (pandas, Excel, this script's own re-runs).
+        for col_idx, name in enumerate(EXPECTED_HEADERS, start=1):
+            ws.cell(row=1, column=col_idx, value=name)
         header_row = EXPECTED_HEADERS
     elif header_row != EXPECTED_HEADERS:
         raise RuntimeError(

@@ -78,13 +78,24 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px;
-    margin-bottom: 28px;
+    margin-bottom: 24px;
   }
   .stat-tile {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
     background: var(--surface-1);
     border: 1px solid var(--border);
     border-radius: 10px;
     padding: 16px 18px;
+    cursor: pointer;
+  }
+  .stat-tile:hover { background: var(--page); }
+  .stat-tile.active {
+    border-color: var(--series-1);
+    background: var(--page);
   }
   .stat-tile .stat-label {
     font-size: 12.5px;
@@ -101,7 +112,87 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-top: 4px;
+    min-height: 15px;
   }
+  .stat-tile .stat-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 10px;
+  }
+  .stat-tile:hover .stat-hint,
+  .stat-tile.active .stat-hint { color: var(--text-secondary); }
+
+  /* The shared history panel -- one at a time, visually docked to whichever
+     tile opened it (the arrow is a rotated square positioned by JS to sit
+     under that tile's horizontal center), like a browser tab's content pane. */
+  .stat-history-panel {
+    position: relative;
+    background: var(--surface-1);
+    border: 1px solid var(--series-1);
+    border-radius: 12px;
+    padding: 20px 24px 18px;
+    margin: -6px 0 24px;
+  }
+  .stat-history-arrow {
+    position: absolute;
+    top: -8px;
+    width: 14px;
+    height: 14px;
+    background: var(--surface-1);
+    border-left: 1px solid var(--series-1);
+    border-top: 1px solid var(--series-1);
+    transform: translateX(-50%) rotate(45deg);
+  }
+  .stat-history-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .stat-history-head h3 {
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0;
+  }
+  .stat-history-head-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .stat-history-views {
+    display: flex;
+    gap: 2px;
+    background: var(--page);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+  }
+  .stat-history-views button {
+    font: inherit;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .stat-history-views button.active {
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .stat-history-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+  .stat-history-close:hover { color: var(--text-primary); }
 
   .card {
     background: var(--surface-1);
@@ -174,9 +265,32 @@
   }
   .table-wrap { overflow-x: auto; }
 
+  /* Fixed layout stretched to fill the width, with percentages set from
+     each column's own natural (auto-layout) content width, measured then
+     converted to shares of the total -- so the fill-to-100% stretch adds
+     the same proportional slack everywhere instead of dumping it on
+     whichever column auto layout happens to favor. Term still allows
+     wrapping: unlike auto layout, a fixed column's width can't be distorted
+     by one rare long value (an FRN/TIPS security_term like "1-Year
+     11-Month"), so that case just wraps within its normal share. A
+     min-width floor (roughly the sum of each column's own natural content
+     width) stops percentages from ever squeezing a column below what its
+     content needs -- past that point .table-wrap's horizontal scroll takes
+     over instead of columns overlapping. */
+  #top-maturities-table { table-layout: fixed; min-width: 600px; }
+  #top-maturities-table th, #top-maturities-table td { text-align: left; }
   #top-maturities-table th { cursor: pointer; }
   #top-maturities-table th:hover { color: var(--text-primary); }
   #top-maturities-table th.sorted::after { content: " \25BE"; }
+  #top-maturities-table th:nth-child(1), #top-maturities-table td:nth-child(1) { width: 10%; }
+  #top-maturities-table th:nth-child(2), #top-maturities-table td:nth-child(2) { width: 13%; white-space: normal; }
+  #top-maturities-table th:nth-child(3), #top-maturities-table td:nth-child(3) { width: 19%; }
+  #top-maturities-table th:nth-child(4), #top-maturities-table td:nth-child(4) { width: 15%; }
+  #top-maturities-table th:nth-child(5), #top-maturities-table td:nth-child(5) { width: 12%; }
+  #top-maturities-table th:nth-child(6), #top-maturities-table td:nth-child(6) { width: 14%; }
+  #top-maturities-table th:nth-child(7), #top-maturities-table td:nth-child(7) { width: 17%; }
+  .rate-down { color: var(--success); }
+  .rate-up { color: var(--status-critical); }
 
   .type-dot {
     display: inline-block;
@@ -279,6 +393,21 @@
 
   <section class="stat-tiles" id="stat-tiles" aria-label="Headline figures"></section>
 
+  <section class="stat-history-panel" id="stat-history-panel" hidden>
+    <div class="stat-history-arrow" id="stat-history-arrow"></div>
+    <div class="stat-history-head">
+      <h3 id="stat-history-title"></h3>
+      <div class="stat-history-head-right">
+        <div class="stat-history-views" id="stat-history-views" hidden></div>
+        <button type="button" class="stat-history-close" id="stat-history-close" aria-label="Close history">&times;</button>
+      </div>
+    </div>
+    <figure class="chart-figure">
+      <canvas id="chart-stat-history" role="img"></canvas>
+    </figure>
+    <details class="table-toggle"><summary>View data as table</summary><div id="table-stat-history"></div></details>
+  </section>
+
   <section class="card">
     <h2>The Maturity Wall</h2>
     <p class="section-sub">How much marketable debt comes due, and when — split by security type.</p>
@@ -330,7 +459,11 @@
 
   <section class="card">
     <h2>Largest Upcoming Maturities</h2>
-    <p class="section-sub">The 20 largest individual maturities currently outstanding (reopenings of the same CUSIP combined).</p>
+    <p class="section-sub">
+      The 20 largest individual maturities currently outstanding (reopenings of the same CUSIP combined).
+      “Refi. rate” is hypothetical: what a new auction of the same term is yielding today, as if that exact
+      tranche were replaced at the same duration — not a prediction of what will actually happen.
+    </p>
     <div class="table-wrap">
       <table id="top-maturities-table">
         <thead><tr>
@@ -339,6 +472,7 @@
           <th data-key="maturity_date">Maturity date</th>
           <th data-key="amount">Amount</th>
           <th data-key="rate_pct">Rate</th>
+          <th data-key="refi_rate_pct">Refi. rate</th>
           <th class="col-text" data-key="cusip">CUSIP</th>
         </tr></thead>
         <tbody id="top-maturities-body"></tbody>
@@ -484,16 +618,24 @@ function renderStackedTypeBar(canvasId, labels, byType) {
 // Single-series line chart. Used for the rate-by-bucket chart (paired below
 // the maturity wall on a matching x-axis -- kept as its own chart, not a
 // second y-axis on the bar chart, since dollars and percent aren't the same
-// scale) and the full-history quarterly rate trend.
-function renderRateLine(canvasId, labels, values, { sparse = false, pointRadius } = {}) {
-  const ctx = document.getElementById(canvasId).getContext('2d');
+// scale), the full-history quarterly rate trend, and the stat-tile history
+// panel. `canvasOrId` accepts either an element id (charts fixed in the
+// page's HTML) or a canvas element directly (the stat-history panel's
+// canvas is reused across tiles, so it's fetched once by the caller).
+function renderMetricLine(canvasOrId, labels, values, opts = {}) {
+  const {
+    sparse = false, pointRadius,
+    formatY = (v) => v, formatTooltip = formatY, emptyLabel = 'No data',
+  } = opts;
+  const canvas = typeof canvasOrId === 'string' ? document.getElementById(canvasOrId) : canvasOrId;
+  const ctx = canvas.getContext('2d');
   const color = cssVar('--series-1');
   return new Chart(ctx, {
     type: 'line',
     data: {
       labels,
       datasets: [{
-        label: 'Weighted avg rate',
+        label: 'value',
         data: values,
         borderColor: color,
         backgroundColor: hexToRgba(color, 0.1),
@@ -514,11 +656,11 @@ function renderRateLine(canvasId, labels, values, { sparse = false, pointRadius 
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { grid: { display: false }, ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: sparse ? 14 : 10, maxRotation: 0 } },
-        y: { grid: { color: ink.grid }, border: { display: false }, ticks: { color: ink.muted, callback: (v) => v.toFixed(1) + '%' } },
+        y: { grid: { color: ink.grid }, border: { display: false }, ticks: { color: ink.muted, callback: formatY } },
       },
       plugins: {
         legend: { display: false },
-        tooltip: { ...tooltipBase(), callbacks: { label: (item) => (item.raw == null ? 'No debt in this bucket' : formatPct(item.raw)) } },
+        tooltip: { ...tooltipBase(), callbacks: { label: (item) => (item.raw == null ? emptyLabel : formatTooltip(item.raw)) } },
       },
     },
   });
@@ -558,6 +700,7 @@ function renderComposition(canvasId, types, amounts) {
 // ---- Table-view twins (the accessibility/no-JS-chart equivalent) ----------
 function buildSimpleTable(containerId, headers, rows) {
   const container = document.getElementById(containerId);
+  container.textContent = ''; // this container may be rebuilt more than once (the stat-history panel is shared/reused across tiles)
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
@@ -624,25 +767,174 @@ function renderHeaderMeta() {
     `(issue dates through ${formatDate(dt.latest_issue_date)}) · ${dt.total_records.toLocaleString()} auction records analyzed.`;
 }
 
-function renderStatTiles() {
-  const s = REPORT_DATA.summary;
-  const tiles = [
-    { label: 'Total marketable debt outstanding', value: formatUSD(s.total_outstanding, 2) },
-    { label: 'Weighted average interest rate', value: formatPct(s.weighted_avg_rate_pct) },
-    { label: 'Weighted average maturity', value: s.weighted_avg_maturity_years.toFixed(1) + ' yrs' },
-    { label: 'Maturing within 12 months', value: formatPct(s.pct_maturing_12mo) },
-    { label: 'Maturing within 90 days', value: formatUSD(s.amount_maturing_90d, 1) },
-  ];
-  const el = document.getElementById('stat-tiles');
-  tiles.forEach((t) => {
-    const div = document.createElement('div');
-    div.className = 'stat-tile';
-    const label = document.createElement('div'); label.className = 'stat-label'; label.textContent = t.label;
-    const value = document.createElement('div'); value.className = 'stat-value'; value.textContent = t.value;
-    div.append(label, value);
-    el.appendChild(div);
+// Each tile: its headline value, an optional small companion line (the
+// "big number, small companion" pairing), and one or more `views` -- each a
+// (REPORT_DATA.history[key], formatter) pair the shared history panel can
+// plot. A tile with >1 view gets a toggle in the panel header to switch
+// between them (e.g. dollar amount vs. % of total); the first view is the
+// default shown on open.
+const STAT_TILES = [
+  {
+    label: 'Total marketable debt outstanding',
+    value: (s) => formatUSD(s.total_outstanding, 2),
+    views: [
+      { id: 'amount', label: '$', key: 'total_outstanding', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 2) },
+    ],
+  },
+  {
+    label: 'Weighted average interest rate',
+    value: (s) => formatPct(s.weighted_avg_rate_pct),
+    sub: (s) => formatUSD(s.annual_interest_cost, 2) + '/yr in interest',
+    views: [
+      { id: 'rate', label: '%', key: 'weighted_avg_rate_pct', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
+      { id: 'dollar', label: '$', key: 'annual_interest_cost', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 2) },
+    ],
+  },
+  {
+    label: 'Weighted average maturity',
+    value: (s) => s.weighted_avg_maturity_years.toFixed(1) + ' yrs',
+    views: [
+      { id: 'years', label: 'yrs', key: 'weighted_avg_maturity_years', formatY: (v) => v.toFixed(1) + 'y', formatTooltip: (v) => v.toFixed(2) + ' yrs' },
+    ],
+  },
+  {
+    label: 'Maturing within 12 months',
+    value: (s) => formatPct(s.pct_maturing_12mo),
+    sub: (s) => formatUSD(s.amount_maturing_12mo, 2) + ' maturing',
+    views: [
+      { id: 'pct', label: '%', key: 'pct_maturing_12mo', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
+      { id: 'amount', label: '$', key: 'amount_maturing_12mo', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 2) },
+    ],
+  },
+  {
+    label: 'Maturing within 90 days',
+    value: (s) => formatPct(s.pct_maturing_90d),
+    sub: (s) => formatUSD(s.amount_maturing_90d, 1) + ' maturing',
+    views: [
+      { id: 'pct', label: '%', key: 'pct_maturing_90d', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
+      { id: 'amount', label: '$', key: 'amount_maturing_90d', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 1) },
+    ],
+  },
+];
+
+let activeStatTile = null;
+let activeStatConfig = null;
+let statHistoryChart = null;
+const statTileHints = new Map(); // tile button -> its "Show/Hide history" hint element
+
+function positionStatHistoryArrow(tile) {
+  const panel = document.getElementById('stat-history-panel');
+  const arrow = document.getElementById('stat-history-arrow');
+  const tileRect = tile.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  arrow.style.left = `${tileRect.left + tileRect.width / 2 - panelRect.left}px`;
+}
+
+function setStatTileActive(tile, isActive) {
+  tile.classList.toggle('active', isActive);
+  tile.setAttribute('aria-pressed', String(isActive));
+  const hint = statTileHints.get(tile);
+  if (hint) hint.textContent = isActive ? 'Hide history' : 'Show history';
+}
+
+function closeStatHistory() {
+  if (activeStatTile) setStatTileActive(activeStatTile, false);
+  activeStatTile = null;
+  activeStatConfig = null;
+  document.getElementById('stat-history-panel').hidden = true;
+  if (statHistoryChart) { statHistoryChart.destroy(); statHistoryChart = null; }
+}
+
+// Renders (or re-renders, on a view toggle click) the chart + table for
+// whichever tile is currently open, using one specific view.
+function renderStatHistoryView(config, viewId) {
+  const h = REPORT_DATA.history;
+  const view = config.views.find((v) => v.id === viewId) || config.views[0];
+
+  const canvas = document.getElementById('chart-stat-history');
+  canvas.setAttribute('aria-label', `Monthly history of ${config.label.toLowerCase()} (${view.label}) since 1980`);
+  if (statHistoryChart) statHistoryChart.destroy();
+  statHistoryChart = renderMetricLine(canvas, h.dates, h[view.key], {
+    sparse: true,
+    pointRadius: 0,
+    formatY: view.formatY,
+    formatTooltip: view.formatTooltip,
+    emptyLabel: 'No data yet',
+  });
+
+  buildSimpleTable(
+    'table-stat-history',
+    ['Date', `${config.label} (${view.label})`],
+    h.dates.map((d, i) => [formatDate(d), h[view.key][i] == null ? '—' : view.formatTooltip(h[view.key][i])]),
+  );
+
+  document.querySelectorAll('#stat-history-views button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.viewId === view.id);
   });
 }
+
+function buildStatHistoryViewToggle(config) {
+  const container = document.getElementById('stat-history-views');
+  container.textContent = '';
+  if (config.views.length <= 1) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  config.views.forEach((view) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = view.label;
+    btn.dataset.viewId = view.id;
+    btn.addEventListener('click', () => renderStatHistoryView(activeStatConfig, view.id));
+    container.appendChild(btn);
+  });
+}
+
+function openStatHistory(tile, config) {
+  if (activeStatTile === tile) { closeStatHistory(); return; }
+  if (activeStatTile) setStatTileActive(activeStatTile, false);
+  activeStatTile = tile;
+  activeStatConfig = config;
+  setStatTileActive(tile, true);
+
+  const panel = document.getElementById('stat-history-panel');
+  panel.hidden = false;
+  document.getElementById('stat-history-title').textContent = config.label;
+
+  buildStatHistoryViewToggle(config);
+  renderStatHistoryView(config, config.views[0].id);
+
+  positionStatHistoryArrow(tile);
+}
+
+function renderStatTiles() {
+  const s = REPORT_DATA.summary;
+  const el = document.getElementById('stat-tiles');
+
+  STAT_TILES.forEach((tile) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'stat-tile';
+    button.setAttribute('aria-pressed', 'false');
+
+    const label = document.createElement('div'); label.className = 'stat-label'; label.textContent = tile.label;
+    const value = document.createElement('div'); value.className = 'stat-value'; value.textContent = tile.value(s);
+    const sub = document.createElement('div'); sub.className = 'stat-sub'; sub.textContent = tile.sub ? tile.sub(s) : '';
+    const hint = document.createElement('div'); hint.className = 'stat-hint'; hint.textContent = 'Show history';
+    button.append(label, value, sub, hint);
+    statTileHints.set(button, hint);
+
+    button.addEventListener('click', () => openStatHistory(button, tile));
+
+    el.appendChild(button);
+  });
+}
+
+document.getElementById('stat-history-close').addEventListener('click', closeStatHistory);
+window.addEventListener('resize', () => {
+  if (activeStatTile) positionStatHistoryArrow(activeStatTile);
+});
 
 function renderCompositionLegend() {
   const { types, amounts } = REPORT_DATA.composition;
@@ -712,8 +1004,20 @@ function renderTopMaturitiesTable() {
     const dateCell = document.createElement('td'); dateCell.textContent = formatDate(r.maturity_date);
     const amtCell = document.createElement('td'); amtCell.textContent = formatUSD(r.amount, 2);
     const rateCell = document.createElement('td'); rateCell.textContent = r.rate_pct == null ? '—' : formatPct(r.rate_pct);
+    const refiCell = document.createElement('td');
+    if (r.refi_rate_pct == null) {
+      refiCell.textContent = '—';
+    } else {
+      refiCell.textContent = formatPct(r.refi_rate_pct);
+      if (r.rate_pct != null) {
+        // Cheaper to refinance today (green) vs. more expensive (red) than
+        // what that tranche is currently paying.
+        if (r.refi_rate_pct < r.rate_pct) refiCell.classList.add('rate-down');
+        else if (r.refi_rate_pct > r.rate_pct) refiCell.classList.add('rate-up');
+      }
+    }
     const cusipCell = document.createElement('td'); cusipCell.className = 'col-text'; cusipCell.textContent = r.cusip;
-    tr.append(typeCell, termCell, dateCell, amtCell, rateCell, cusipCell);
+    tr.append(typeCell, termCell, dateCell, amtCell, rateCell, refiCell, cusipCell);
     tbody.appendChild(tr);
   });
 }
@@ -746,13 +1050,17 @@ renderStatTiles();
 renderStackedTypeBar('chart-maturity-wall', REPORT_DATA.maturity_wall.buckets, REPORT_DATA.maturity_wall.by_type);
 tableForMaturityWall();
 
-renderRateLine('chart-rate-by-bucket', REPORT_DATA.rate_by_bucket.buckets, REPORT_DATA.rate_by_bucket.avg_rate_pct, { sparse: false });
+renderMetricLine('chart-rate-by-bucket', REPORT_DATA.rate_by_bucket.buckets, REPORT_DATA.rate_by_bucket.avg_rate_pct, {
+  sparse: false, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct, emptyLabel: 'No debt in this bucket',
+});
 tableForRateByBucket();
 
 renderComposition('chart-composition', REPORT_DATA.composition.types, REPORT_DATA.composition.amounts);
 renderCompositionLegend();
 
-renderRateLine('chart-rate-trend', REPORT_DATA.historical_rate_trend.periods, REPORT_DATA.historical_rate_trend.avg_rate_pct, { sparse: true, pointRadius: 0 });
+renderMetricLine('chart-rate-trend', REPORT_DATA.historical_rate_trend.periods, REPORT_DATA.historical_rate_trend.avg_rate_pct, {
+  sparse: true, pointRadius: 0, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct,
+});
 tableForRateTrend();
 
 renderStackedTypeBar('chart-issuance-mix', REPORT_DATA.issuance_mix.periods, REPORT_DATA.issuance_mix.by_type);
