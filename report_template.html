@@ -292,6 +292,20 @@
   .rate-down { color: var(--success); }
   .rate-up { color: var(--status-critical); }
 
+  #recent-auctions-table { table-layout: fixed; min-width: 640px; }
+  #recent-auctions-table th, #recent-auctions-table td { text-align: left; }
+  #recent-auctions-table th { cursor: pointer; }
+  #recent-auctions-table th:hover { color: var(--text-primary); }
+  #recent-auctions-table th.sorted::after { content: " \25BE"; }
+  #recent-auctions-table th:nth-child(1), #recent-auctions-table td:nth-child(1) { width: 13%; }
+  #recent-auctions-table th:nth-child(2), #recent-auctions-table td:nth-child(2) { width: 11%; }
+  #recent-auctions-table th:nth-child(3), #recent-auctions-table td:nth-child(3) { width: 13%; white-space: normal; }
+  #recent-auctions-table th:nth-child(4), #recent-auctions-table td:nth-child(4) { width: 13%; }
+  #recent-auctions-table th:nth-child(5), #recent-auctions-table td:nth-child(5) { width: 9%; }
+  #recent-auctions-table th:nth-child(6), #recent-auctions-table td:nth-child(6) { width: 11%; }
+  #recent-auctions-table th:nth-child(7), #recent-auctions-table td:nth-child(7) { width: 13%; }
+  #recent-auctions-table th:nth-child(8), #recent-auctions-table td:nth-child(8) { width: 17%; }
+
   .type-dot {
     display: inline-block;
     width: 8px;
@@ -480,6 +494,30 @@
     </div>
   </section>
 
+  <section class="card">
+    <h2>Recent Treasury Auctions</h2>
+    <p class="section-sub">
+      Every individual auction held in the last 2 weeks. Bid-to-cover is total bids divided by the amount
+      awarded — higher means stronger investor demand for that auction.
+    </p>
+    <div class="table-wrap">
+      <table id="recent-auctions-table">
+        <thead><tr>
+          <th data-key="auction_date">Auction date</th>
+          <th class="col-text" data-key="type">Type</th>
+          <th class="col-text" data-key="term">Term</th>
+          <th data-key="amount">Amount</th>
+          <th data-key="rate_pct">Rate</th>
+          <th data-key="bid_to_cover">Bid-to-cover</th>
+          <th data-key="maturity_date">Maturity date</th>
+          <th class="col-text" data-key="cusip">CUSIP</th>
+        </tr></thead>
+        <tbody id="recent-auctions-body"></tbody>
+      </table>
+    </div>
+    <p class="section-sub" id="recent-auctions-empty" hidden>No auctions in the last 2 weeks.</p>
+  </section>
+
   <footer class="report-footer">
     <h2>Data &amp; caveats</h2>
     <ul id="caveats-list"></ul>
@@ -560,6 +598,9 @@ function formatPct(n, digits) {
 function formatDate(s) {
   if (!s) return '—';
   return new Date(s + 'T00:00:00').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function formatRatio(n) {
+  return n == null ? '—' : n.toFixed(2) + 'x';
 }
 
 // ---- Chart helpers -------------------------------------------------------
@@ -1032,6 +1073,51 @@ document.querySelectorAll('#top-maturities-table th').forEach((th) => {
   });
 });
 
+let recentAuctionsSort = { key: 'auction_date', dir: -1 };
+function sortRecentAuctions(rows) {
+  const { key, dir } = recentAuctionsSort;
+  rows.sort((a, b) => {
+    const av = a[key];
+    const bv = b[key];
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return av.localeCompare(bv) * dir;
+    return (av - bv) * dir;
+  });
+}
+function renderRecentAuctionsTable() {
+  const rows = [...REPORT_DATA.recent_auctions];
+  sortRecentAuctions(rows);
+  document.getElementById('recent-auctions-empty').hidden = rows.length > 0;
+  const tbody = document.getElementById('recent-auctions-body');
+  tbody.textContent = '';
+  rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    const dateCell = document.createElement('td'); dateCell.textContent = formatDate(r.auction_date);
+    const typeCell = document.createElement('td'); typeCell.className = 'col-text';
+    const dot = document.createElement('span'); dot.className = 'type-dot'; dot.style.background = typeColor(r.type);
+    typeCell.append(dot, document.createTextNode(r.type));
+    const termCell = document.createElement('td'); termCell.className = 'col-text'; termCell.textContent = r.term;
+    const amtCell = document.createElement('td'); amtCell.textContent = formatUSD(r.amount, 2);
+    const rateCell = document.createElement('td'); rateCell.textContent = r.rate_pct == null ? '—' : formatPct(r.rate_pct);
+    const btcCell = document.createElement('td'); btcCell.textContent = formatRatio(r.bid_to_cover);
+    const maturityCell = document.createElement('td'); maturityCell.textContent = formatDate(r.maturity_date);
+    const cusipCell = document.createElement('td'); cusipCell.className = 'col-text'; cusipCell.textContent = r.cusip;
+    tr.append(dateCell, typeCell, termCell, amtCell, rateCell, btcCell, maturityCell, cusipCell);
+    tbody.appendChild(tr);
+  });
+}
+document.querySelectorAll('#recent-auctions-table th').forEach((th) => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if (recentAuctionsSort.key === key) recentAuctionsSort.dir *= -1;
+    else recentAuctionsSort = { key, dir: ['auction_date', 'amount', 'rate_pct', 'bid_to_cover', 'maturity_date'].includes(key) ? -1 : 1 };
+    document.querySelectorAll('#recent-auctions-table th').forEach((x) => x.classList.remove('sorted'));
+    th.classList.add('sorted');
+    renderRecentAuctionsTable();
+  });
+});
+
 function renderCaveats() {
   const ul = document.getElementById('caveats-list');
   REPORT_DATA.caveats.forEach((c) => {
@@ -1068,6 +1154,7 @@ tableForIssuanceMix();
 
 renderRefinancingCallout();
 renderTopMaturitiesTable();
+renderRecentAuctionsTable();
 renderCaveats();
 </script>
 </body>

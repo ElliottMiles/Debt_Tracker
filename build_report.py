@@ -300,6 +300,25 @@ def main():
         for row in top_grp.itertuples()
     ]
 
+    # ---- recent auctions: every individual auction event in the last 2
+    # weeks (unlike top_maturities, reopenings are NOT combined here -- this
+    # is a log of auction events, not a snapshot of outstanding debt) ----
+    recent_cutoff = today - pd.Timedelta(days=14)
+    recent = df[df["auction_date"] >= recent_cutoff].sort_values("auction_date", ascending=False)
+    recent_auctions = [
+        {
+            "cusip": row.cusip,
+            "type": row.type,
+            "term": row.security_term,
+            "auction_date": iso_date(row.auction_date),
+            "maturity_date": iso_date(row.maturity_date),
+            "amount": float(row.total_accepted),
+            "rate_pct": round(float(row.effective_rate_pct), 3) if pd.notna(row.effective_rate_pct) else None,
+            "bid_to_cover": round(float(row.bid_to_cover_ratio), 2) if pd.notna(row.bid_to_cover_ratio) else None,
+        }
+        for row in recent.itertuples()
+    ]
+
     # ---- point-in-time history for the "Show history" tile sparklines ----
     hist_dates = month_start_dates(HISTORY_START, today_date.replace(day=1))
     if hist_dates[-1] != today:
@@ -354,6 +373,7 @@ def main():
             ),
         },
         "top_maturities": top_maturities,
+        "recent_auctions": recent_auctions,
         "type_order": TYPE_ORDER,
         "caveats": [
             "Covers marketable, auctioned Treasury debt only — excludes savings bonds, SLGS, and "
