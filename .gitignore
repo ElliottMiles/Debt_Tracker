@@ -11,3 +11,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Microsoft Office lock files (created while a file is open, e.g. in Excel)
+~$*

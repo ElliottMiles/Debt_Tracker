@@ -24,6 +24,7 @@
     --series-4: #eda100; /* TIPS */
     --series-5: #e87ba4; /* FRN  */
     --series-6: #008300; /* CMB  */
+    --series-7: #4a3aa7; /* used only by the by-maturity chart (7 durations), no relation to the type colors above */
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -44,6 +45,7 @@
       --series-4: #c98500;
       --series-5: #d55181;
       --series-6: #008300;
+      --series-7: #9085e9;
     }
   }
 
@@ -225,6 +227,25 @@
   }
   .chart-figure-short { height: 180px; }
   .chart-figure-thin { height: 74px; }
+  .chart-figure-tall { height: 380px; }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .filter-row select {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    cursor: pointer;
+  }
 
   .table-toggle {
     margin-top: 10px;
@@ -462,6 +483,26 @@
       <canvas id="chart-issuance-mix" role="img" aria-label="Stacked bar chart of annual issuance by security type"></canvas>
     </figure>
     <details class="table-toggle"><summary>View data as table</summary><div id="table-issuance-mix"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>Auction History by Maturity</h2>
+    <p class="section-sub">
+      Every individual auction for the seven benchmark maturities, since 1980. Click a line in the legend
+      to hide or show it.
+    </p>
+    <div class="filter-row">
+      <label for="duration-metric-select">Show</label>
+      <select id="duration-metric-select">
+        <option value="rate">Interest rate</option>
+        <option value="amount">Auction size</option>
+        <option value="bid_to_cover">Bid-to-cover ratio</option>
+      </select>
+    </div>
+    <figure class="chart-figure chart-figure-tall">
+      <canvas id="chart-duration-detail" role="img"></canvas>
+    </figure>
+    <details class="table-toggle"><summary>View data as table</summary><div id="table-duration-detail"></div></details>
   </section>
 
   <section class="card callout">
@@ -737,6 +778,102 @@ function renderComposition(canvasId, types, amounts) {
     },
   });
 }
+
+// Multi-line chart of raw, per-auction values across the 7 benchmark
+// maturities. Unlike every other chart in this report, each series has its
+// own independent set of x positions (each maturity auctions on a different
+// cadence), so a shared category x-axis (used everywhere else to avoid
+// needing a date-adapter library) won't work here. Instead each point is
+// {x, y} with x as a millisecond timestamp on a plain `linear` scale --
+// still no date-adapter dependency, just a tick/tooltip callback that
+// formats the number back into a date.
+const DURATION_VAR = {
+  '1 Month': '--series-1', '3 Month': '--series-2', '1 Year': '--series-3', '2 Year': '--series-4',
+  '5 Year': '--series-5', '10 Year': '--series-6', '30 Year': '--series-7',
+};
+const DURATION_METRICS = {
+  rate: { formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct },
+  amount: { formatY: (v) => formatUSD(v, 0), formatTooltip: (v) => formatUSD(v, 2) },
+  bid_to_cover: { formatY: (v) => v.toFixed(1) + 'x', formatTooltip: formatRatio },
+};
+
+let durationDetailChart = null;
+function renderDurationDetailChart(metricKey) {
+  const { durations, series } = REPORT_DATA.duration_detail;
+  const metric = DURATION_METRICS[metricKey];
+  const canvas = document.getElementById('chart-duration-detail');
+  canvas.setAttribute('aria-label', `Line chart of ${metricKey === 'bid_to_cover' ? 'bid-to-cover ratio' : metricKey} by maturity, one line per benchmark maturity, over time`);
+
+  const datasets = durations.map((d) => {
+    const color = cssVar(DURATION_VAR[d]);
+    return {
+      label: d,
+      data: series[d]
+        .filter((pt) => pt[metricKey] != null)
+        .map((pt) => ({ x: Date.parse(pt.date), y: pt[metricKey] })),
+      borderColor: color,
+      backgroundColor: color,
+      fill: false,
+      borderWidth: 1.5,
+      tension: 0,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointHoverBackgroundColor: color,
+      pointHoverBorderColor: ink.surface,
+      pointHoverBorderWidth: 2,
+    };
+  });
+
+  if (durationDetailChart) durationDetailChart.destroy();
+  durationDetailChart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+      scales: {
+        x: {
+          type: 'linear',
+          grid: { display: false },
+          ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: 14, maxRotation: 0, callback: (v) => new Date(v).getFullYear() },
+        },
+        y: { grid: { color: ink.grid }, border: { display: false }, ticks: { color: ink.muted, callback: metric.formatY } },
+      },
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: ink.secondary, boxWidth: 16, boxHeight: 2, usePointStyle: true, pointStyle: 'line' },
+        },
+        tooltip: {
+          ...tooltipBase(),
+          callbacks: {
+            title: (items) => (items.length ? new Date(items[0].parsed.x).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : ''),
+            label: (item) => `${item.dataset.label}: ${metric.formatTooltip(item.parsed.y)}`,
+          },
+        },
+      },
+    },
+  });
+}
+
+function tableForDurationDetail() {
+  const { durations, series } = REPORT_DATA.duration_detail;
+  const flat = [];
+  durations.forEach((d) => series[d].forEach((pt) => flat.push({ ...pt, duration: d })));
+  flat.sort((a, b) => b.date.localeCompare(a.date));
+  const rows = flat.map((pt) => [
+    formatDate(pt.date), pt.duration,
+    pt.rate == null ? '—' : formatPct(pt.rate),
+    formatUSD(pt.amount, 2),
+    formatRatio(pt.bid_to_cover),
+  ]);
+  buildSimpleTable('table-duration-detail', ['Date', 'Duration', 'Rate', 'Amount', 'Bid-to-cover'], rows);
+}
+
+document.getElementById('duration-metric-select').addEventListener('change', (e) => {
+  renderDurationDetailChart(e.target.value);
+});
 
 // ---- Table-view twins (the accessibility/no-JS-chart equivalent) ----------
 function buildSimpleTable(containerId, headers, rows) {
@@ -1151,6 +1288,9 @@ tableForRateTrend();
 
 renderStackedTypeBar('chart-issuance-mix', REPORT_DATA.issuance_mix.periods, REPORT_DATA.issuance_mix.by_type);
 tableForIssuanceMix();
+
+renderDurationDetailChart('rate');
+tableForDurationDetail();
 
 renderRefinancingCallout();
 renderTopMaturitiesTable();

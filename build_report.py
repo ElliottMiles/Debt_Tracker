@@ -44,6 +44,21 @@ MATURITY_BUCKETS = [
 ]
 BUCKET_LABELS = [b[0] for b in MATURITY_BUCKETS]
 
+# The 7 conventional "yield curve" benchmark maturities, for the by-maturity
+# auction history chart. Keyed by (type, term) rather than term alone --
+# TIPS and FRN reuse the same term labels as Notes/Bonds (see the note by
+# latest_rate_by_type_term below), so term alone would silently pull in a
+# TIPS real yield under a "10-Year" label meant to mean the nominal Note.
+DURATION_DEFS = [
+    ("1 Month", "Bill", "4-Week"),
+    ("3 Month", "Bill", "13-Week"),
+    ("1 Year", "Bill", "52-Week"),
+    ("2 Year", "Note", "2-Year"),
+    ("5 Year", "Note", "5-Year"),
+    ("10 Year", "Note", "10-Year"),
+    ("30 Year", "Bond", "30-Year"),
+]
+
 # Earliest date TreasuryDirect's structured auction records go back to -- also
 # where the "Show history" sparklines start (see historical_snapshots below).
 HISTORY_START = date(1980, 1, 1)
@@ -248,16 +263,39 @@ def main():
     issuance_periods = [str(y) for y in issuance_pivot.index]
     issuance_by_type = {t: [float(v) for v in issuance_pivot[t]] for t in TYPE_ORDER}
 
+    # ---- auction history by benchmark maturity: every individual auction
+    # (raw, not aggregated) for each of the 7 durations, full history ----
+    duration_series = {}
+    for label, sec_type, sec_term in DURATION_DEFS:
+        rows = df[(df["type"] == sec_type) & (df["term"] == sec_term)].sort_values("auction_date")
+        duration_series[label] = [
+            {
+                "date": iso_date(row.auction_date),
+                "rate": round(float(row.effective_rate_pct), 3) if pd.notna(row.effective_rate_pct) else None,
+                "amount": float(row.total_accepted),
+                "bid_to_cover": round(float(row.bid_to_cover_ratio), 2) if pd.notna(row.bid_to_cover_ratio) else None,
+            }
+            for row in rows.itertuples()
+        ]
+
     # ---- refinancing cost impact: debt maturing in the next 12 months, its own
     # rate at issuance vs. the most recent auction of the same term ----
-    latest_rate_by_term = (
+    # IMPORTANT: "term" alone isn't a unique key -- TIPS and FRN reuse the same
+    # term labels as regular Notes/Bonds (e.g. both a 10-Year Note and a
+    # 10-Year TIPS have term == "10-Year"), so grouping by term alone can match
+    # a maturing nominal Note against a TIPS *real* yield (or vice versa) --
+    # different instruments with rates that aren't comparable. Group by
+    # (type, term) together so each security only ever gets compared to the
+    # most recent auction of the exact same instrument.
+    df["_type_term_key"] = df["type"] + " " + df["term"]
+    latest_rate_by_type_term = (
         df.dropna(subset=["effective_rate_pct"])
         .sort_values("auction_date")
-        .groupby("term")["effective_rate_pct"]
+        .groupby("_type_term_key")["effective_rate_pct"]
         .last()
     )
     maturing_12mo = outstanding[outstanding["days_to_maturity"] <= 365].copy()
-    maturing_12mo["current_term_rate"] = maturing_12mo["term"].map(latest_rate_by_term)
+    maturing_12mo["current_term_rate"] = (maturing_12mo["type"] + " " + maturing_12mo["term"]).map(latest_rate_by_type_term)
     matched = maturing_12mo.dropna(subset=["effective_rate_pct", "current_term_rate"])
     matched_amount = float(matched["total_accepted"].sum())
     total_maturing_12mo = float(maturing_12mo["total_accepted"].sum())
@@ -283,9 +321,10 @@ def main():
     )
     top_grp["rate_pct"] = top_grp["rate_component"] / top_grp["rate_weight"]
     # Purely hypothetical "if this exact tranche were refinanced today at the
-    # same term" rate -- the most recent auction of that same term, same
-    # lookup used for the aggregate refinancing-cost-impact section above.
-    top_grp["refi_rate_pct"] = top_grp["term"].map(latest_rate_by_term)
+    # same term" rate -- the most recent auction of the same (type, term)
+    # pair, same lookup used for the aggregate refinancing-cost-impact
+    # section above (see the note there on why type is part of the key).
+    top_grp["refi_rate_pct"] = (top_grp["type"] + " " + top_grp["term"]).map(latest_rate_by_type_term)
     top_grp = top_grp.sort_values("amount", ascending=False).head(20)
     top_maturities = [
         {
@@ -362,6 +401,10 @@ def main():
         "issuance_mix": {
             "periods": issuance_periods,
             "by_type": issuance_by_type,
+        },
+        "duration_detail": {
+            "durations": [label for label, _, _ in DURATION_DEFS],
+            "series": duration_series,
         },
         "refinancing_gap": {
             "amount_maturing_12mo": total_maturing_12mo,
