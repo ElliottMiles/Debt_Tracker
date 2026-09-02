@@ -262,6 +262,9 @@ def main():
     ).reindex(columns=TYPE_ORDER, fill_value=0)
     issuance_periods = [str(y) for y in issuance_pivot.index]
     issuance_by_type = {t: [float(v) for v in issuance_pivot[t]] for t in TYPE_ORDER}
+    # Same breakdown as a % of that year's total issuance, for the chart's $/% toggle.
+    issuance_pivot_pct = issuance_pivot.div(issuance_pivot.sum(axis=1), axis=0) * 100
+    issuance_by_type_pct = {t: [round(float(v), 2) for v in issuance_pivot_pct[t]] for t in TYPE_ORDER}
 
     # ---- auction history by benchmark maturity: every individual auction
     # (raw, not aggregated) for each of the 7 durations, full history ----
@@ -401,6 +404,7 @@ def main():
         "issuance_mix": {
             "periods": issuance_periods,
             "by_type": issuance_by_type,
+            "by_type_pct": issuance_by_type_pct,
         },
         "duration_detail": {
             "durations": [label for label, _, _ in DURATION_DEFS],

@@ -247,6 +247,34 @@
     cursor: pointer;
   }
 
+  /* Small segmented toggle for switching a chart between views (e.g. $ vs
+     %) -- visually the same pattern as the stat-tile history panel's view
+     switcher, kept as its own class so this doesn't touch that feature. */
+  .chart-view-toggle {
+    display: inline-flex;
+    gap: 2px;
+    background: var(--page);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    margin-bottom: 14px;
+  }
+  .chart-view-toggle button {
+    font: inherit;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .chart-view-toggle button.active {
+    background: var(--surface-1);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
   .table-toggle {
     margin-top: 10px;
   }
@@ -479,6 +507,10 @@
   <section class="card">
     <h2>Issuance Mix Over Time</h2>
     <p class="section-sub">Total dollar amount auctioned per year, by security type.</p>
+    <div class="chart-view-toggle" id="issuance-mix-view-toggle">
+      <button type="button" data-view="amount" class="active">$</button>
+      <button type="button" data-view="pct">%</button>
+    </div>
     <figure class="chart-figure">
       <canvas id="chart-issuance-mix" role="img" aria-label="Stacked bar chart of annual issuance by security type"></canvas>
     </figure>
@@ -659,7 +691,12 @@ function tooltipBase() {
 // Stacked column chart, one series per security type, sharing a fixed
 // bucket/period x-axis. Used for the maturity wall and the issuance mix --
 // both are "amount by category, split by type" charts.
-function renderStackedTypeBar(canvasId, labels, byType) {
+function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
+  const {
+    formatY = (v) => formatUSD(v, 0),
+    formatTooltip = (v) => formatUSD(v, 1),
+    max,
+  } = opts;
   const ctx = document.getElementById(canvasId).getContext('2d');
   const datasets = TYPE_ORDER.filter((t) => byType[t] && byType[t].some((v) => v > 0)).map((t) => ({
     label: t,
@@ -682,8 +719,8 @@ function renderStackedTypeBar(canvasId, labels, byType) {
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: 16, maxRotation: 0 } },
         y: {
-          stacked: true, beginAtZero: true, grid: { color: ink.grid }, border: { display: false },
-          ticks: { color: ink.muted, callback: (v) => formatUSD(v, 0) },
+          stacked: true, beginAtZero: true, max, grid: { color: ink.grid }, border: { display: false },
+          ticks: { color: ink.muted, callback: formatY },
         },
       },
       plugins: {
@@ -691,7 +728,7 @@ function renderStackedTypeBar(canvasId, labels, byType) {
           display: datasets.length > 1, position: 'bottom',
           labels: { color: ink.secondary, boxWidth: 12, boxHeight: 12, usePointStyle: true, pointStyle: 'rect' },
         },
-        tooltip: { ...tooltipBase(), callbacks: { label: (item) => `${item.dataset.label}: ${formatUSD(item.raw, 1)}` } },
+        tooltip: { ...tooltipBase(), callbacks: { label: (item) => `${item.dataset.label}: ${formatTooltip(item.raw)}` } },
       },
     },
   });
@@ -936,6 +973,25 @@ function tableForIssuanceMix() {
   buildSimpleTable('table-issuance-mix', ['Year', ...types, 'Total'], rows);
 }
 
+let issuanceMixChart = null;
+function renderIssuanceMixChart(view) {
+  const { periods, by_type, by_type_pct } = REPORT_DATA.issuance_mix;
+  if (issuanceMixChart) issuanceMixChart.destroy();
+  issuanceMixChart = view === 'pct'
+    ? renderStackedTypeBar('chart-issuance-mix', periods, by_type_pct, {
+        max: 100,
+        formatY: (v) => v.toFixed(0) + '%',
+        formatTooltip: (v) => formatPct(v, 1),
+      })
+    : renderStackedTypeBar('chart-issuance-mix', periods, by_type);
+  document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+}
+document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
+  btn.addEventListener('click', () => renderIssuanceMixChart(btn.dataset.view));
+});
+
 // ---- Non-chart sections -----------------------------------------------
 function renderHeaderMeta() {
   const dt = REPORT_DATA.data_through;
@@ -970,7 +1026,7 @@ const STAT_TILES = [
   },
   {
     label: 'Weighted average maturity',
-    value: (s) => s.weighted_avg_maturity_years.toFixed(1) + ' yrs',
+    value: (s) => s.weighted_avg_maturity_years.toFixed(2) + ' yrs',
     views: [
       { id: 'years', label: 'yrs', key: 'weighted_avg_maturity_years', formatY: (v) => v.toFixed(1) + 'y', formatTooltip: (v) => v.toFixed(2) + ' yrs' },
     ],
@@ -1286,7 +1342,7 @@ renderMetricLine('chart-rate-trend', REPORT_DATA.historical_rate_trend.periods, 
 });
 tableForRateTrend();
 
-renderStackedTypeBar('chart-issuance-mix', REPORT_DATA.issuance_mix.periods, REPORT_DATA.issuance_mix.by_type);
+renderIssuanceMixChart('amount');
 tableForIssuanceMix();
 
 renderDurationDetailChart('rate');
