@@ -766,6 +766,11 @@ function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
     formatY = (v) => formatUSD(v, 0),
     formatTooltip = (v) => formatUSD(v, 1),
     max,
+    // Charts rebuilt on every zoom-slider drag frame pass animation: false --
+    // otherwise each frame starts a new ~1s grow-in animation on top of the
+    // last one still playing, which reads as glitching rather than a smooth
+    // change. Charts that only ever render once (no slider) keep the default.
+    animation = true,
   } = opts;
   const ctx = document.getElementById(canvasId).getContext('2d');
   const datasets = TYPE_ORDER.filter((t) => byType[t] && byType[t].some((v) => v > 0)).map((t) => ({
@@ -785,6 +790,7 @@ function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation,
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: 16, maxRotation: 0 } },
@@ -815,6 +821,8 @@ function renderMetricLine(canvasOrId, labels, values, opts = {}) {
   const {
     sparse = false, pointRadius,
     formatY = (v) => v, formatTooltip = formatY, emptyLabel = 'No data',
+    // See the matching note in renderStackedTypeBar -- same reasoning.
+    animation = true,
   } = opts;
   const canvas = typeof canvasOrId === 'string' ? document.getElementById(canvasOrId) : canvasOrId;
   const ctx = canvas.getContext('2d');
@@ -842,6 +850,7 @@ function renderMetricLine(canvasOrId, labels, values, opts = {}) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation,
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { grid: { display: false }, ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: sparse ? 14 : 10, maxRotation: 0 } },
@@ -976,6 +985,9 @@ function renderDurationDetailChart() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      // Rebuilt on every zoom-slider drag frame and metric-dropdown change --
+      // see the matching note on renderStackedTypeBar/renderMetricLine.
+      animation: false,
       interaction: { mode: 'nearest', intersect: false, axis: 'x' },
       scales: {
         x: {
@@ -1118,6 +1130,13 @@ function renderYieldCurveChart(index) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      // Every slider move destroys and recreates this chart (see below), and
+      // Chart.js's default animation always eases in from a zero/baseline
+      // start -- fine for a chart that renders once, but here it means every
+      // single date briefly "grows" up from 0 before settling, which reads
+      // as the curve glitching rather than smoothly stepping from one date
+      // to the next. Off entirely so a new date is just immediately there.
+      animation: false,
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: { grid: { display: false }, ticks: { color: ink.muted } },
@@ -1127,8 +1146,8 @@ function renderYieldCurveChart(index) {
           // reads correctly if the axis stays put -- an auto-scaled axis
           // would make every date look like a similarly-sized curve even
           // when the actual rate level is wildly different.
-          min: -1,
-          max: 20,
+          min: 0,
+          max: 12,
           grid: { color: ink.grid },
           border: { display: false },
           ticks: { color: ink.muted, callback: (v) => v.toFixed(1) + '%' },
@@ -1247,8 +1266,9 @@ function renderIssuanceMixChart() {
         max: 100,
         formatY: (v) => v.toFixed(0) + '%',
         formatTooltip: (v) => formatPct(v, 1),
+        animation: false,
       })
-    : renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type));
+    : renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type), { animation: false });
   document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === issuanceMixView);
   });
@@ -1374,6 +1394,7 @@ function renderStatHistoryView(config, viewId) {
     formatY: view.formatY,
     formatTooltip: view.formatTooltip,
     emptyLabel: 'No data yet',
+    animation: false,
   });
 
   buildSimpleTable(
@@ -1491,8 +1512,9 @@ function renderCompositionChart() {
         max: 100,
         formatY: (v) => v.toFixed(0) + '%',
         formatTooltip: (v) => formatPct(v, 1),
+        animation: false,
       })
-    : renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type));
+    : renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type), { animation: false });
   document.querySelectorAll('#composition-view-toggle button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === compositionView);
   });
@@ -1669,7 +1691,7 @@ function renderRateTrendChart(startIdx, endIdx) {
     'chart-rate-trend',
     periods.slice(startIdx, endIdx + 1),
     avg_rate_pct.slice(startIdx, endIdx + 1),
-    { sparse: true, pointRadius: 0, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct },
+    { sparse: true, pointRadius: 0, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct, animation: false },
   );
 }
 {
