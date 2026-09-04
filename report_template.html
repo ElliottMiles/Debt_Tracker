@@ -226,7 +226,6 @@
     position: relative;
   }
   .chart-figure-short { height: 180px; }
-  .chart-figure-thin { height: 74px; }
   .chart-figure-tall { height: 380px; }
 
   .filter-row {
@@ -405,36 +404,6 @@
     flex: none;
   }
 
-  .composition-legend {
-    list-style: none;
-    margin: 14px 0 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px 16px;
-  }
-  .composition-legend li {
-    display: flex;
-    align-items: center;
-    font-size: 13.5px;
-    color: var(--text-secondary);
-  }
-  .composition-legend .legend-type {
-    color: var(--text-primary);
-    margin-right: 6px;
-  }
-  .composition-legend .legend-value {
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary);
-    font-weight: 600;
-  }
-  .composition-legend .legend-pct {
-    margin-left: 8px;
-    color: var(--text-muted);
-    min-width: 44px;
-    text-align: right;
-  }
 
   .callout-grid {
     display: grid;
@@ -529,12 +498,20 @@
   </section>
 
   <section class="card">
-    <h2>Debt Composition</h2>
-    <p class="section-sub">Outstanding marketable debt by security type.</p>
-    <figure class="chart-figure chart-figure-thin">
-      <canvas id="chart-composition" role="img" aria-label="Horizontal stacked bar chart of outstanding debt by security type"></canvas>
+    <h2>Debt Composition Over Time</h2>
+    <p class="section-sub">
+      Outstanding marketable debt by security type, one snapshot per year since 1980 (this year's bar is
+      today, not January 1st).
+    </p>
+    <div class="chart-view-toggle" id="composition-view-toggle">
+      <button type="button" data-view="pct" class="active">%</button>
+      <button type="button" data-view="amount">$</button>
+    </div>
+    <figure class="chart-figure">
+      <canvas id="chart-composition" role="img" aria-label="Stacked bar chart of outstanding debt by security type, by year"></canvas>
     </figure>
-    <ul class="composition-legend" id="composition-legend"></ul>
+    <div class="range-slider" id="composition-range-slider"></div>
+    <details class="table-toggle"><summary>View data as table</summary><div id="table-composition"></div></details>
   </section>
 
   <section class="card">
@@ -825,37 +802,6 @@ function renderMetricLine(canvasOrId, labels, values, opts = {}) {
       plugins: {
         legend: { display: false },
         tooltip: { ...tooltipBase(), callbacks: { label: (item) => (item.raw == null ? emptyLabel : formatTooltip(item.raw)) } },
-      },
-    },
-  });
-}
-
-// Single horizontal 100%-stacked bar -- the report's part-to-whole view of
-// total debt composition by type.
-function renderComposition(canvasId, types, amounts) {
-  const ctx = document.getElementById(canvasId).getContext('2d');
-  const datasets = types.map((t, i) => ({
-    label: t,
-    data: [amounts[i]],
-    backgroundColor: typeColor(t),
-    borderRadius: 3,
-    borderSkipped: false,
-    maxBarThickness: 40,
-  }));
-  return new Chart(ctx, {
-    type: 'bar',
-    data: { labels: [''], datasets },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        x: { stacked: true, beginAtZero: true, grid: { color: ink.grid }, border: { display: false }, ticks: { color: ink.muted, callback: (v) => formatUSD(v, 0) } },
-        y: { stacked: true, grid: { display: false }, ticks: { display: false }, border: { display: false } },
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: { ...tooltipBase(), callbacks: { label: (item) => `${item.dataset.label}: ${formatUSD(item.raw, 1)}` } },
       },
     },
   });
@@ -1336,19 +1282,47 @@ window.addEventListener('resize', () => {
   });
 }
 
-function renderCompositionLegend() {
-  const { types, amounts } = REPORT_DATA.composition;
-  const total = amounts.reduce((a, b) => a + b, 0);
-  const el = document.getElementById('composition-legend');
-  types.forEach((t, i) => {
-    if (amounts[i] <= 0) return;
-    const li = document.createElement('li');
-    const dot = document.createElement('span'); dot.className = 'type-dot'; dot.style.background = typeColor(t);
-    const label = document.createElement('span'); label.className = 'legend-type'; label.textContent = t;
-    const value = document.createElement('span'); value.className = 'legend-value'; value.textContent = formatUSD(amounts[i], 2);
-    const pct = document.createElement('span'); pct.className = 'legend-pct'; pct.textContent = formatPct((amounts[i] / total) * 100, 1);
-    li.append(dot, label, value, pct);
-    el.appendChild(li);
+function tableForComposition() {
+  const { periods, by_type } = REPORT_DATA.composition;
+  const types = TYPE_ORDER.filter((t) => by_type[t] && by_type[t].some((v) => v > 0));
+  const rows = periods.map((y, i) => {
+    const vals = types.map((t) => formatUSD(by_type[t][i], 1));
+    const total = types.reduce((s, t) => s + by_type[t][i], 0);
+    return [y, ...vals, formatUSD(total, 1)];
+  });
+  buildSimpleTable('table-composition', ['Year', ...types, 'Total'], rows);
+}
+
+let compositionChart = null;
+let compositionView = 'pct';
+let compositionRange = null; // [startIdx, endIdx], or null for full history
+function renderCompositionChart() {
+  const { periods, by_type, by_type_pct } = REPORT_DATA.composition;
+  const [s, e] = compositionRange ?? [0, periods.length - 1];
+  const slicedPeriods = periods.slice(s, e + 1);
+  const sliceByType = (obj) => Object.fromEntries(TYPE_ORDER.map((t) => [t, obj[t].slice(s, e + 1)]));
+
+  if (compositionChart) compositionChart.destroy();
+  compositionChart = compositionView === 'pct'
+    ? renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type_pct), {
+        max: 100,
+        formatY: (v) => v.toFixed(0) + '%',
+        formatTooltip: (v) => formatPct(v, 1),
+      })
+    : renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type));
+  document.querySelectorAll('#composition-view-toggle button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === compositionView);
+  });
+}
+document.querySelectorAll('#composition-view-toggle button').forEach((btn) => {
+  btn.addEventListener('click', () => { compositionView = btn.dataset.view; renderCompositionChart(); });
+});
+{
+  const { periods } = REPORT_DATA.composition;
+  createDualRangeSlider(document.getElementById('composition-range-slider'), {
+    min: 0, max: periods.length - 1, valueMin: 0, valueMax: periods.length - 1,
+    formatLabel: (i) => periods[Math.round(i)],
+    onChange: (s, e) => { compositionRange = [Math.round(s), Math.round(e)]; renderCompositionChart(); },
   });
 }
 
@@ -1500,8 +1474,7 @@ renderMetricLine('chart-rate-by-bucket', REPORT_DATA.rate_by_bucket.buckets, REP
 });
 tableForRateByBucket();
 
-renderComposition('chart-composition', REPORT_DATA.composition.types, REPORT_DATA.composition.amounts);
-renderCompositionLegend();
+tableForComposition();
 
 let rateTrendChart = null;
 function renderRateTrendChart(startIdx, endIdx) {

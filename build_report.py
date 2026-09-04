@@ -240,11 +240,29 @@ def main():
     # misstate things if any outstanding row ever lacks a rate).
     annual_interest_cost = float(outstanding["_rate_component"].sum() / 100)
 
-    # ---- composition: total $ outstanding by type ----
-    composition_amounts = (
-        outstanding.groupby("type")["total_accepted"].sum().reindex(TYPE_ORDER, fill_value=0)
-    )
-    composition_amounts = [float(v) for v in composition_amounts]
+    # ---- debt composition over time: outstanding-by-type, one point-in-time
+    # snapshot per calendar year (same issue_date<=D & maturity_date>D replay
+    # used everywhere else in this app). The current year's snapshot is
+    # "today" rather than Jan 1 of this year, so the most recent bar matches
+    # the live numbers elsewhere on the page, without also needing a separate
+    # "today" point that would otherwise duplicate the current year's label. ----
+    composition_years = list(range(HISTORY_START.year, today_date.year))
+    composition_dates = [pd.Timestamp(year=y, month=1, day=1) for y in composition_years] + [today]
+    composition_periods = [str(y) for y in composition_years] + [str(today_date.year)]
+
+    composition_by_type = {t: [] for t in TYPE_ORDER}
+    for d in composition_dates:
+        snap = df[(df["issue_date"] <= d) & (df["maturity_date"] > d)]
+        totals = snap.groupby("type")["total_accepted"].sum()
+        for t in TYPE_ORDER:
+            composition_by_type[t].append(float(totals.get(t, 0.0)))
+
+    composition_by_type_pct = {t: [] for t in TYPE_ORDER}
+    for i in range(len(composition_periods)):
+        year_total = sum(composition_by_type[t][i] for t in TYPE_ORDER)
+        for t in TYPE_ORDER:
+            pct = round(composition_by_type[t][i] / year_total * 100, 2) if year_total else 0.0
+            composition_by_type_pct[t].append(pct)
 
     # ---- historical rate trend: weighted-avg rate at issuance, quarterly, full history ----
     hist = df[df["effective_rate_pct"].notna()].copy()
@@ -394,8 +412,9 @@ def main():
             "avg_rate_pct": rate_by_bucket,
         },
         "composition": {
-            "types": TYPE_ORDER,
-            "amounts": composition_amounts,
+            "periods": composition_periods,
+            "by_type": composition_by_type,
+            "by_type_pct": composition_by_type_pct,
         },
         "historical_rate_trend": {
             "periods": historical_periods,
