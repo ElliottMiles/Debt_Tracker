@@ -246,6 +246,35 @@
     cursor: pointer;
   }
 
+  .yc-controls {
+    margin-top: 14px;
+  }
+  .yc-controls input[type="range"] {
+    width: 100%;
+    accent-color: var(--series-1);
+    cursor: pointer;
+  }
+  .yc-date-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .yc-date-row input[type="date"] {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+  }
+  .yc-date-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
   /* Small segmented toggle for switching a chart between views (e.g. $ vs
      %) -- visually the same pattern as the stat-tile history panel's view
      switcher, kept as its own class so this doesn't touch that feature. */
@@ -495,6 +524,25 @@
       <canvas id="chart-rate-by-bucket" role="img" aria-label="Line chart of weighted average interest rate by maturity bucket"></canvas>
     </figure>
     <details class="table-toggle"><summary>View data as table</summary><div id="table-rate-by-bucket"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>The Yield Curve</h2>
+    <p class="section-sub">
+      The par yield curve across the seven benchmark maturities, for any trading day since 1990.
+      Drag the slider or pick an exact date.
+    </p>
+    <figure class="chart-figure">
+      <canvas id="chart-yield-curve" role="img"></canvas>
+    </figure>
+    <div class="yc-controls">
+      <input type="range" id="yc-slider" aria-label="Select date by position in history">
+      <div class="yc-date-row">
+        <input type="date" id="yc-date-input" aria-label="Select exact date">
+        <span class="yc-date-label" id="yc-date-label"></span>
+      </div>
+    </div>
+    <details class="table-toggle"><summary>View data as table</summary><div id="table-yield-curve"></div></details>
   </section>
 
   <section class="card">
@@ -1018,6 +1066,141 @@ function buildSimpleTable(containerId, headers, rows) {
   container.appendChild(table);
 }
 
+// The yield curve: a single-day snapshot (x-axis = maturity, not time --
+// unlike every other chart in this report) plus a faint permanent reference
+// line for the most recent trading day, so a shift from "today" is visible
+// at a glance no matter which historical date is selected.
+let yieldCurveChart = null;
+
+function renderYieldCurveChart(index) {
+  const yc = REPORT_DATA.yield_curve;
+  const latestIndex = yc.dates.length - 1;
+  const selectedColor = cssVar('--series-1');
+  const todayColor = cssVar('--text-muted');
+
+  const selectedValues = yc.durations.map((d) => yc.values[d][index]);
+  const todayValues = yc.durations.map((d) => yc.values[d][latestIndex]);
+
+  if (yieldCurveChart) yieldCurveChart.destroy();
+  yieldCurveChart = new Chart(document.getElementById('chart-yield-curve').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: yc.durations,
+      datasets: [
+        {
+          label: `Today (${formatDate(yc.dates[latestIndex])})`,
+          data: todayValues,
+          borderColor: todayColor,
+          backgroundColor: todayColor,
+          borderDash: [4, 4],
+          borderWidth: 1.5,
+          pointRadius: 3,
+          pointBackgroundColor: todayColor,
+          fill: false,
+          tension: 0,
+        },
+        {
+          label: `Selected (${formatDate(yc.dates[index])})`,
+          data: selectedValues,
+          borderColor: selectedColor,
+          backgroundColor: selectedColor,
+          borderWidth: 2,
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          pointBackgroundColor: selectedColor,
+          pointBorderColor: ink.surface,
+          pointBorderWidth: 2,
+          fill: false,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: ink.muted } },
+        y: {
+          // Fixed, not auto-scaled: the whole point of this chart is
+          // comparing shape/level across dates via the slider, which only
+          // reads correctly if the axis stays put -- an auto-scaled axis
+          // would make every date look like a similarly-sized curve even
+          // when the actual rate level is wildly different.
+          min: -1,
+          max: 20,
+          grid: { color: ink.grid },
+          border: { display: false },
+          ticks: { color: ink.muted, callback: (v) => v.toFixed(1) + '%' },
+        },
+      },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: ink.secondary, boxWidth: 16, boxHeight: 2, usePointStyle: true, pointStyle: 'line' } },
+        tooltip: {
+          ...tooltipBase(),
+          callbacks: { label: (item) => `${item.dataset.label}: ${item.raw == null ? '—' : formatPct(item.raw)}` },
+        },
+      },
+    },
+  });
+}
+
+function tableForYieldCurve(index) {
+  const yc = REPORT_DATA.yield_curve;
+  const rows = yc.durations.map((d) => [d, yc.values[d][index] == null ? '—' : formatPct(yc.values[d][index])]);
+  buildSimpleTable('table-yield-curve', ['Maturity', 'Yield'], rows);
+}
+
+function initYieldCurveControls() {
+  const yc = REPORT_DATA.yield_curve;
+  const lastIndex = yc.dates.length - 1;
+  const slider = document.getElementById('yc-slider');
+  const dateInput = document.getElementById('yc-date-input');
+  const dateLabel = document.getElementById('yc-date-label');
+
+  slider.min = 0;
+  slider.max = lastIndex;
+  slider.step = 1;
+  dateInput.min = yc.dates[0];
+  dateInput.max = yc.dates[lastIndex];
+
+  function setIndex(index) {
+    index = Math.max(0, Math.min(lastIndex, index));
+    slider.value = index;
+    dateInput.value = yc.dates[index];
+    dateLabel.textContent = formatDate(yc.dates[index]);
+    renderYieldCurveChart(index);
+    tableForYieldCurve(index);
+  }
+
+  // yc.dates is sorted ascending ISO strings, so plain string comparison is
+  // enough to binary-search it. Finds the first date >= target; a picked
+  // weekend/holiday snaps to the nearest actual trading day on either side
+  // (not just the next one after it) so the picker always lands somewhere
+  // meaningful instead of silently jumping further than expected.
+  function closestIndexForDate(target) {
+    let lo = 0;
+    let hi = lastIndex;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (yc.dates[mid] < target) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0 && yc.dates[lo] !== target) {
+      const before = new Date(yc.dates[lo - 1]);
+      const after = new Date(yc.dates[lo]);
+      const targetDate = new Date(target);
+      if (targetDate - before <= after - targetDate) return lo - 1;
+    }
+    return lo;
+  }
+
+  slider.addEventListener('input', () => setIndex(parseInt(slider.value, 10)));
+  dateInput.addEventListener('change', () => setIndex(closestIndexForDate(dateInput.value)));
+
+  setIndex(lastIndex); // default to the most recent trading day
+}
+
 function tableForMaturityWall() {
   const { buckets, by_type } = REPORT_DATA.maturity_wall;
   const types = TYPE_ORDER.filter((t) => by_type[t] && by_type[t].some((v) => v > 0));
@@ -1473,6 +1656,8 @@ renderMetricLine('chart-rate-by-bucket', REPORT_DATA.rate_by_bucket.buckets, REP
   sparse: false, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct, emptyLabel: 'No debt in this bucket',
 });
 tableForRateByBucket();
+
+initYieldCurveControls();
 
 tableForComposition();
 

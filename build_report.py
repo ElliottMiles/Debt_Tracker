@@ -20,6 +20,7 @@ from pathlib import Path
 import pandas as pd
 
 EXCEL_PATH = Path(__file__).resolve().parent / "Treasury_Auction_History.xlsx"
+YIELD_CURVE_PATH = Path(__file__).resolve().parent / "Yield_Curve_History.csv"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "report_template.html"
 OUTPUT_PATH = Path(__file__).resolve().parent / "Debt_Report.html"
 SHEET_NAME = "Auctions"
@@ -63,6 +64,20 @@ DURATION_DEFS = [
 # where the "Show history" sparklines start (see historical_snapshots below).
 HISTORY_START = date(1980, 1, 1)
 
+# Same 7 benchmark maturities as DURATION_DEFS, same display labels -- mapped
+# here to Yield_Curve_History.csv's own column names (fetch_yield_curve.py's
+# source labels its columns "1 Mo"/"3 Mo"/etc., not the same strings used for
+# the auction-history side of the app).
+YIELD_CURVE_DURATIONS = [
+    ("1 Month", "1 Mo"),
+    ("3 Month", "3 Mo"),
+    ("1 Year", "1 Yr"),
+    ("2 Year", "2 Yr"),
+    ("5 Year", "5 Yr"),
+    ("10 Year", "10 Yr"),
+    ("30 Year", "30 Yr"),
+]
+
 
 def bucket_for_days(days):
     for label, lo, hi in MATURITY_BUCKETS:
@@ -78,6 +93,31 @@ def load_auctions():
     # Stub rows (auction announced but not yet held) carry no results yet --
     # they're not part of any debt-structure calculation.
     return df[df["total_accepted"].notna()].copy()
+
+
+def load_yield_curve():
+    """Read Yield_Curve_History.csv (from fetch_yield_curve.py) into a plain
+    dict shaped for direct use by the yield-curve slider: parallel arrays,
+    one value per trading day per benchmark maturity, aligned by index so the
+    frontend can pick "day i" and read every maturity's value for it without
+    any date lookups of its own."""
+    if not YIELD_CURVE_PATH.exists():
+        raise FileNotFoundError(
+            f"{YIELD_CURVE_PATH.name} not found. Run fetch_yield_curve.py first."
+        )
+    df = pd.read_csv(YIELD_CURVE_PATH, parse_dates=["date"]).sort_values("date")
+    dates = [iso_date(d) for d in df["date"]]
+    values = {}
+    for label, column in YIELD_CURVE_DURATIONS:
+        if column in df.columns:
+            values[label] = [None if pd.isna(v) else round(float(v), 3) for v in df[column]]
+        else:
+            values[label] = [None] * len(df)
+    return {
+        "dates": dates,
+        "durations": [label for label, _ in YIELD_CURVE_DURATIONS],
+        "values": values,
+    }
 
 
 def compute_effective_rate(df):
@@ -187,6 +227,7 @@ def historical_snapshots(df, dates):
 def main():
     df = load_auctions()
     df["effective_rate_pct"] = compute_effective_rate(df)
+    yield_curve = load_yield_curve()
 
     today_date = date.today()
     today = pd.Timestamp(today_date)
@@ -429,6 +470,7 @@ def main():
             "durations": [label for label, _, _ in DURATION_DEFS],
             "series": duration_series,
         },
+        "yield_curve": yield_curve,
         "refinancing_gap": {
             "amount_maturing_12mo": total_maturing_12mo,
             "coverage_pct": coverage_pct,
