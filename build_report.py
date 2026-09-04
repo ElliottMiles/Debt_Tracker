@@ -431,7 +431,6 @@ def main():
             "yield for Notes/Bonds/TIPS.",
             "FRN rates are approximated as that auction's fixed spread plus the most recent 13-week Bill rate "
             "at the time — a proxy for a rate that actually floats weekly.",
-            "The 4-week Bill auctioned 2001-09-11 has no rate on file in Treasury's own historical records.",
             "“Refinancing cost impact” compares maturing debt's own rate at issuance to the most recent "
             "auction of the same term — a simplified proxy, not an official Treasury estimate. Covers "
             f"{coverage_pct:.1f}% of debt maturing in the next 12 months (the rest has no directly comparable "

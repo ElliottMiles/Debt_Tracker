@@ -275,6 +275,47 @@
     font-weight: 600;
   }
 
+  /* Dual-handle date-range zoom slider, placed under a history chart. Built
+     from two overlapping native <input type="range"> elements -- only the
+     round thumbs are click/drag targets (pointer-events is off everywhere
+     else on the input), so the two handles don't fight each other for
+     clicks on the track between them. */
+  .range-slider { margin: 6px 0 0; }
+  .range-slider-rail { position: relative; height: 24px; }
+  .range-slider-track {
+    position: absolute; top: 10px; left: 0; right: 0; height: 4px;
+    border-radius: 2px; background: var(--gridline);
+  }
+  .range-slider-fill {
+    position: absolute; top: 10px; height: 4px;
+    border-radius: 2px; background: var(--series-1);
+  }
+  .range-slider-input {
+    position: absolute; top: 3px; left: 0; width: 100%; height: 18px; margin: 0;
+    background: transparent; -webkit-appearance: none; appearance: none; pointer-events: none;
+  }
+  .range-slider-input::-webkit-slider-runnable-track { -webkit-appearance: none; background: transparent; height: 18px; }
+  .range-slider-input::-moz-range-track { background: transparent; height: 18px; border: none; }
+  .range-slider-input::-webkit-slider-thumb {
+    -webkit-appearance: none; pointer-events: auto; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--series-1); border: 2px solid var(--surface-1); box-shadow: 0 0 0 1px var(--border); cursor: pointer;
+  }
+  .range-slider-input::-moz-range-thumb {
+    pointer-events: auto; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--series-1); border: 2px solid var(--surface-1); box-shadow: 0 0 0 1px var(--border); cursor: pointer;
+  }
+  .range-slider-start { z-index: 1; }
+  .range-slider-end { z-index: 2; }
+  .range-slider-labels {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-muted); margin-top: 2px;
+  }
+  .range-slider-reset {
+    font: inherit; font-size: 11px; color: var(--text-secondary);
+    background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline;
+  }
+  .range-slider-reset:hover { color: var(--text-primary); }
+
   .table-toggle {
     margin-top: 10px;
   }
@@ -468,6 +509,7 @@
     <figure class="chart-figure">
       <canvas id="chart-stat-history" role="img"></canvas>
     </figure>
+    <div class="range-slider" id="stat-history-range-slider"></div>
     <details class="table-toggle"><summary>View data as table</summary><div id="table-stat-history"></div></details>
   </section>
 
@@ -501,6 +543,7 @@
     <figure class="chart-figure">
       <canvas id="chart-rate-trend" role="img" aria-label="Line chart of weighted average interest rate at issuance over time"></canvas>
     </figure>
+    <div class="range-slider" id="rate-trend-range-slider"></div>
     <details class="table-toggle"><summary>View data as table</summary><div id="table-rate-trend"></div></details>
   </section>
 
@@ -514,6 +557,7 @@
     <figure class="chart-figure">
       <canvas id="chart-issuance-mix" role="img" aria-label="Stacked bar chart of annual issuance by security type"></canvas>
     </figure>
+    <div class="range-slider" id="issuance-mix-range-slider"></div>
     <details class="table-toggle"><summary>View data as table</summary><div id="table-issuance-mix"></div></details>
   </section>
 
@@ -534,6 +578,7 @@
     <figure class="chart-figure chart-figure-tall">
       <canvas id="chart-duration-detail" role="img"></canvas>
     </figure>
+    <div class="range-slider" id="duration-detail-range-slider"></div>
     <details class="table-toggle"><summary>View data as table</summary><div id="table-duration-detail"></div></details>
   </section>
 
@@ -816,6 +861,72 @@ function renderComposition(canvasId, types, amounts) {
   });
 }
 
+// A dual-handle date-range zoom slider, placed under a history chart. `min`/
+// `max` are the full numeric extent the handles can reach -- either an index
+// into a labels array, or a millisecond timestamp -- and `formatLabel` turns
+// a handle's current value into the text shown beneath it. The expensive
+// part of `onChange` (rebuilding a Chart.js chart) is throttled to once per
+// animation frame, so a fast drag doesn't queue up dozens of rebuilds; the
+// slider's own thumb/fill/label movement stays perfectly responsive since
+// that part still updates synchronously on every input event.
+function createDualRangeSlider(container, { min, max, valueMin, valueMax, formatLabel, onChange }) {
+  container.classList.add('range-slider');
+  container.textContent = '';
+
+  const rail = document.createElement('div'); rail.className = 'range-slider-rail';
+  const track = document.createElement('div'); track.className = 'range-slider-track';
+  const fillEl = document.createElement('div'); fillEl.className = 'range-slider-fill';
+  const startInput = document.createElement('input');
+  startInput.type = 'range'; startInput.className = 'range-slider-input range-slider-start';
+  startInput.min = String(min); startInput.max = String(max); startInput.value = String(valueMin);
+  const endInput = document.createElement('input');
+  endInput.type = 'range'; endInput.className = 'range-slider-input range-slider-end';
+  endInput.min = String(min); endInput.max = String(max); endInput.value = String(valueMax);
+  rail.append(track, fillEl, startInput, endInput);
+
+  const labelsEl = document.createElement('div'); labelsEl.className = 'range-slider-labels';
+  const labelStart = document.createElement('span');
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button'; resetBtn.className = 'range-slider-reset'; resetBtn.textContent = 'Reset zoom';
+  const labelEnd = document.createElement('span');
+  labelsEl.append(labelStart, resetBtn, labelEnd);
+
+  container.append(rail, labelsEl);
+
+  let rafScheduled = false;
+  function render() {
+    const s = Number(startInput.value);
+    const e = Number(endInput.value);
+    // Keep the handles from swapping past each other by clamping each
+    // one's live range to the other's current value.
+    startInput.max = String(e);
+    endInput.min = String(s);
+    const span = max - min || 1;
+    fillEl.style.left = ((s - min) / span) * 100 + '%';
+    fillEl.style.width = ((e - s) / span) * 100 + '%';
+    labelStart.textContent = formatLabel(s);
+    labelEnd.textContent = formatLabel(e);
+    if (rafScheduled) return;
+    rafScheduled = true;
+    requestAnimationFrame(() => {
+      rafScheduled = false;
+      // Re-read current values here (not the s/e captured above) so a fast
+      // drag always ends up rendering the latest position, never a stale one.
+      onChange(Number(startInput.value), Number(endInput.value));
+    });
+  }
+  startInput.addEventListener('input', render);
+  endInput.addEventListener('input', render);
+  resetBtn.addEventListener('click', () => {
+    startInput.value = String(min);
+    endInput.value = String(max);
+    render();
+  });
+  render();
+
+  return { reset: () => resetBtn.click() };
+}
+
 // Multi-line chart of raw, per-auction values across the 7 benchmark
 // maturities. Unlike every other chart in this report, each series has its
 // own independent set of x positions (each maturity auctions on a different
@@ -835,8 +946,11 @@ const DURATION_METRICS = {
 };
 
 let durationDetailChart = null;
-function renderDurationDetailChart(metricKey) {
+let durationDetailMetric = 'rate';
+let durationDetailRange = null; // [minMs, maxMs], or null for full history
+function renderDurationDetailChart() {
   const { durations, series } = REPORT_DATA.duration_detail;
+  const metricKey = durationDetailMetric;
   const metric = DURATION_METRICS[metricKey];
   const canvas = document.getElementById('chart-duration-detail');
   canvas.setAttribute('aria-label', `Line chart of ${metricKey === 'bid_to_cover' ? 'bid-to-cover ratio' : metricKey} by maturity, one line per benchmark maturity, over time`);
@@ -872,6 +986,8 @@ function renderDurationDetailChart(metricKey) {
       scales: {
         x: {
           type: 'linear',
+          min: durationDetailRange ? durationDetailRange[0] : undefined,
+          max: durationDetailRange ? durationDetailRange[1] : undefined,
           grid: { display: false },
           ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: 14, maxRotation: 0, callback: (v) => new Date(v).getFullYear() },
         },
@@ -909,8 +1025,22 @@ function tableForDurationDetail() {
 }
 
 document.getElementById('duration-metric-select').addEventListener('change', (e) => {
-  renderDurationDetailChart(e.target.value);
+  durationDetailMetric = e.target.value;
+  renderDurationDetailChart();
 });
+
+{
+  const allDates = REPORT_DATA.duration_detail.durations.flatMap(
+    (d) => REPORT_DATA.duration_detail.series[d].map((pt) => Date.parse(pt.date)),
+  );
+  const minMs = Math.min(...allDates);
+  const maxMs = Math.max(...allDates);
+  createDualRangeSlider(document.getElementById('duration-detail-range-slider'), {
+    min: minMs, max: maxMs, valueMin: minMs, valueMax: maxMs,
+    formatLabel: (ms) => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short' }),
+    onChange: (s, e) => { durationDetailRange = [s, e]; renderDurationDetailChart(); },
+  });
+}
 
 // ---- Table-view twins (the accessibility/no-JS-chart equivalent) ----------
 function buildSimpleTable(containerId, headers, rows) {
@@ -974,23 +1104,37 @@ function tableForIssuanceMix() {
 }
 
 let issuanceMixChart = null;
-function renderIssuanceMixChart(view) {
+let issuanceMixView = 'amount';
+let issuanceMixRange = null; // [startIdx, endIdx], or null for full history
+function renderIssuanceMixChart() {
   const { periods, by_type, by_type_pct } = REPORT_DATA.issuance_mix;
+  const [s, e] = issuanceMixRange ?? [0, periods.length - 1];
+  const slicedPeriods = periods.slice(s, e + 1);
+  const sliceByType = (obj) => Object.fromEntries(TYPE_ORDER.map((t) => [t, obj[t].slice(s, e + 1)]));
+
   if (issuanceMixChart) issuanceMixChart.destroy();
-  issuanceMixChart = view === 'pct'
-    ? renderStackedTypeBar('chart-issuance-mix', periods, by_type_pct, {
+  issuanceMixChart = issuanceMixView === 'pct'
+    ? renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type_pct), {
         max: 100,
         formatY: (v) => v.toFixed(0) + '%',
         formatTooltip: (v) => formatPct(v, 1),
       })
-    : renderStackedTypeBar('chart-issuance-mix', periods, by_type);
+    : renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type));
   document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.view === view);
+    btn.classList.toggle('active', btn.dataset.view === issuanceMixView);
   });
 }
 document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
-  btn.addEventListener('click', () => renderIssuanceMixChart(btn.dataset.view));
+  btn.addEventListener('click', () => { issuanceMixView = btn.dataset.view; renderIssuanceMixChart(); });
 });
+{
+  const { periods } = REPORT_DATA.issuance_mix;
+  createDualRangeSlider(document.getElementById('issuance-mix-range-slider'), {
+    min: 0, max: periods.length - 1, valueMin: 0, valueMax: periods.length - 1,
+    formatLabel: (i) => periods[Math.round(i)],
+    onChange: (s, e) => { issuanceMixRange = [Math.round(s), Math.round(e)]; renderIssuanceMixChart(); },
+  });
+}
 
 // ---- Non-chart sections -----------------------------------------------
 function renderHeaderMeta() {
@@ -1054,6 +1198,7 @@ const STAT_TILES = [
 let activeStatTile = null;
 let activeStatConfig = null;
 let statHistoryChart = null;
+let statHistoryRange = null; // [startIdx, endIdx] into REPORT_DATA.history.dates -- shared across every tile/view, since they all share the same dates array
 const statTileHints = new Map(); // tile button -> its "Show/Hide history" hint element
 
 function positionStatHistoryArrow(tile) {
@@ -1081,14 +1226,20 @@ function closeStatHistory() {
 
 // Renders (or re-renders, on a view toggle click) the chart + table for
 // whichever tile is currently open, using one specific view.
+let statHistoryViewId = null;
 function renderStatHistoryView(config, viewId) {
   const h = REPORT_DATA.history;
   const view = config.views.find((v) => v.id === viewId) || config.views[0];
+  statHistoryViewId = view.id;
+
+  const [s, e] = statHistoryRange ?? [0, h.dates.length - 1];
+  const dates = h.dates.slice(s, e + 1);
+  const values = h[view.key].slice(s, e + 1);
 
   const canvas = document.getElementById('chart-stat-history');
   canvas.setAttribute('aria-label', `Monthly history of ${config.label.toLowerCase()} (${view.label}) since 1980`);
   if (statHistoryChart) statHistoryChart.destroy();
-  statHistoryChart = renderMetricLine(canvas, h.dates, h[view.key], {
+  statHistoryChart = renderMetricLine(canvas, dates, values, {
     sparse: true,
     pointRadius: 0,
     formatY: view.formatY,
@@ -1099,7 +1250,7 @@ function renderStatHistoryView(config, viewId) {
   buildSimpleTable(
     'table-stat-history',
     ['Date', `${config.label} (${view.label})`],
-    h.dates.map((d, i) => [formatDate(d), h[view.key][i] == null ? '—' : view.formatTooltip(h[view.key][i])]),
+    dates.map((d, i) => [formatDate(d), values[i] == null ? '—' : view.formatTooltip(values[i])]),
   );
 
   document.querySelectorAll('#stat-history-views button').forEach((btn) => {
@@ -1169,6 +1320,21 @@ document.getElementById('stat-history-close').addEventListener('click', closeSta
 window.addEventListener('resize', () => {
   if (activeStatTile) positionStatHistoryArrow(activeStatTile);
 });
+
+// One slider, shared by every tile (they all share the same REPORT_DATA.history.dates
+// axis). It only re-renders when a tile is actually open -- otherwise (e.g. its own
+// initial setup, before any tile has been clicked) there's nothing to render into.
+{
+  const { dates } = REPORT_DATA.history;
+  createDualRangeSlider(document.getElementById('stat-history-range-slider'), {
+    min: 0, max: dates.length - 1, valueMin: 0, valueMax: dates.length - 1,
+    formatLabel: (i) => formatDate(dates[Math.round(i)]),
+    onChange: (s, e) => {
+      statHistoryRange = [Math.round(s), Math.round(e)];
+      if (activeStatConfig) renderStatHistoryView(activeStatConfig, statHistoryViewId);
+    },
+  });
+}
 
 function renderCompositionLegend() {
   const { types, amounts } = REPORT_DATA.composition;
@@ -1337,15 +1503,29 @@ tableForRateByBucket();
 renderComposition('chart-composition', REPORT_DATA.composition.types, REPORT_DATA.composition.amounts);
 renderCompositionLegend();
 
-renderMetricLine('chart-rate-trend', REPORT_DATA.historical_rate_trend.periods, REPORT_DATA.historical_rate_trend.avg_rate_pct, {
-  sparse: true, pointRadius: 0, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct,
-});
+let rateTrendChart = null;
+function renderRateTrendChart(startIdx, endIdx) {
+  const { periods, avg_rate_pct } = REPORT_DATA.historical_rate_trend;
+  if (rateTrendChart) rateTrendChart.destroy();
+  rateTrendChart = renderMetricLine(
+    'chart-rate-trend',
+    periods.slice(startIdx, endIdx + 1),
+    avg_rate_pct.slice(startIdx, endIdx + 1),
+    { sparse: true, pointRadius: 0, formatY: (v) => v.toFixed(1) + '%', formatTooltip: formatPct },
+  );
+}
+{
+  const { periods } = REPORT_DATA.historical_rate_trend;
+  createDualRangeSlider(document.getElementById('rate-trend-range-slider'), {
+    min: 0, max: periods.length - 1, valueMin: 0, valueMax: periods.length - 1,
+    formatLabel: (i) => periods[Math.round(i)],
+    onChange: (s, e) => renderRateTrendChart(Math.round(s), Math.round(e)),
+  });
+}
 tableForRateTrend();
 
-renderIssuanceMixChart('amount');
 tableForIssuanceMix();
 
-renderDurationDetailChart('rate');
 tableForDurationDetail();
 
 renderRefinancingCallout();
