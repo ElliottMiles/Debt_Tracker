@@ -1,0 +1,16 @@
+# Python dependencies for this project (fetch_auctions.py, fetch_yield_curve.py,
+# fetch_all.py, and build_report.py).
+#
+# One-time setup:
+#   python3 -m venv venv
+#   source venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Every time after that, just activate the venv before running any script:
+#   source venv/bin/activate
+#   python fetch_all.py
+#   python build_report.py
+
+requests>=2.31
+openpyxl>=3.1
+pandas>=2.0
