@@ -781,6 +781,34 @@ function tooltipBase() {
 // Stacked column chart, one series per security type, sharing a fixed
 // bucket/period x-axis. Used for the maturity wall and the issuance mix --
 // both are "amount by category, split by type" charts.
+// Captures which datasets are currently hidden (legend-toggled off) on a
+// Chart.js instance, keyed by whatever `keyFn` returns for each one -- so a
+// slider/toggle-driven destroy+recreate can restore the same legend
+// selection instead of resetting every series back to visible (Chart.js has
+// no persistent identity across a destroy(); a brand-new Chart always
+// starts every dataset visible). Key by something stable across
+// re-renders: a type or duration name works (it never changes), but a
+// label that embeds a formatted date (the yield curve's "Selected (...)"
+// dataset) does not -- key that one by position instead.
+//
+// Deliberately checks isDatasetVisible(), not getDatasetMeta().hidden:
+// meta.hidden is only ever set by an actual user legend click
+// (setDatasetVisibility); restoring a dataset's hidden state the way this
+// function's own caller does -- via that dataset's own `hidden: true` in
+// its config, not a legend click -- makes Chart.js honor it for rendering
+// but leaves meta.hidden at its default `null`. Reading meta.hidden here
+// would therefore "see" a real user click but not a restore from a
+// previous round, so the second slider move onward would silently forget
+// it. isDatasetVisible() reflects both paths correctly.
+function captureHiddenByKey(chart, keyFn) {
+  const hidden = new Set();
+  if (!chart) return hidden;
+  chart.data.datasets.forEach((ds, i) => {
+    if (!chart.isDatasetVisible(i)) hidden.add(keyFn(ds, i));
+  });
+  return hidden;
+}
+
 function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
   const {
     formatY = (v) => formatUSD(v, 0),
@@ -791,6 +819,9 @@ function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
     // last one still playing, which reads as glitching rather than a smooth
     // change. Charts that only ever render once (no slider) keep the default.
     animation = true,
+    // Dataset labels (type names) to re-hide on this render -- see
+    // captureHiddenByKey above.
+    hiddenLabels = new Set(),
   } = opts;
   const ctx = document.getElementById(canvasId).getContext('2d');
   const datasets = TYPE_ORDER.filter((t) => byType[t] && byType[t].some((v) => v > 0)).map((t) => ({
@@ -803,6 +834,7 @@ function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
     maxBarThickness: 26,
     categoryPercentage: 0.7,
     barPercentage: 0.9,
+    hidden: hiddenLabels.has(t),
   }));
   return new Chart(ctx, {
     type: 'bar',
@@ -987,6 +1019,7 @@ function renderDurationDetailChart() {
   const canvas = document.getElementById('chart-duration-detail');
   canvas.setAttribute('aria-label', `Line chart of ${metricKey === 'bid_to_cover' ? 'bid-to-cover ratio' : metricKey} by maturity, one line per benchmark maturity, over time`);
 
+  const hiddenLabels = captureHiddenByKey(durationDetailChart, (ds) => ds.label);
   const datasets = durations.map((d) => {
     const color = cssVar(DURATION_VAR[d]);
     return {
@@ -1004,6 +1037,7 @@ function renderDurationDetailChart() {
       pointHoverBackgroundColor: color,
       pointHoverBorderColor: ink.surface,
       pointHoverBorderWidth: 2,
+      hidden: hiddenLabels.has(d),
     };
   });
 
@@ -1121,6 +1155,10 @@ function renderYieldCurveChart(index) {
 
   const selectedValues = yc.durations.map((d) => yc.values[d][index]);
   const todayValues = yc.durations.map((d) => yc.values[d][latestIndex]);
+  // Keyed by position, not label: "Selected (...)" embeds the chosen date,
+  // so its label text is different on every render and can't be matched
+  // back to itself the way a stable type/duration name can.
+  const hiddenByPosition = captureHiddenByKey(yieldCurveChart, (ds, i) => i);
 
   if (yieldCurveChart) yieldCurveChart.destroy();
   yieldCurveChart = new Chart(document.getElementById('chart-yield-curve').getContext('2d'), {
@@ -1139,6 +1177,7 @@ function renderYieldCurveChart(index) {
           pointBackgroundColor: todayColor,
           fill: false,
           tension: 0,
+          hidden: hiddenByPosition.has(0),
         },
         {
           label: `Selected (${formatDate(yc.dates[index])})`,
@@ -1153,6 +1192,7 @@ function renderYieldCurveChart(index) {
           pointBorderWidth: 2,
           fill: false,
           tension: 0,
+          hidden: hiddenByPosition.has(1),
         },
       ],
     },
@@ -1289,6 +1329,7 @@ function renderIssuanceMixChart() {
   const slicedPeriods = periods.slice(s, e + 1);
   const sliceByType = (obj) => Object.fromEntries(TYPE_ORDER.map((t) => [t, obj[t].slice(s, e + 1)]));
 
+  const hiddenLabels = captureHiddenByKey(issuanceMixChart, (ds) => ds.label);
   if (issuanceMixChart) issuanceMixChart.destroy();
   issuanceMixChart = issuanceMixView === 'pct'
     ? renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type_pct), {
@@ -1296,8 +1337,9 @@ function renderIssuanceMixChart() {
         formatY: (v) => v.toFixed(0) + '%',
         formatTooltip: (v) => formatPct(v, 1),
         animation: false,
+        hiddenLabels,
       })
-    : renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type), { animation: false });
+    : renderStackedTypeBar('chart-issuance-mix', slicedPeriods, sliceByType(by_type), { animation: false, hiddenLabels });
   document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === issuanceMixView);
   });
@@ -1537,6 +1579,7 @@ function renderCompositionChart() {
   const slicedPeriods = periods.slice(s, e + 1);
   const sliceByType = (obj) => Object.fromEntries(TYPE_ORDER.map((t) => [t, obj[t].slice(s, e + 1)]));
 
+  const hiddenLabels = captureHiddenByKey(compositionChart, (ds) => ds.label);
   if (compositionChart) compositionChart.destroy();
   compositionChart = compositionView === 'pct'
     ? renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type_pct), {
@@ -1544,8 +1587,9 @@ function renderCompositionChart() {
         formatY: (v) => v.toFixed(0) + '%',
         formatTooltip: (v) => formatPct(v, 1),
         animation: false,
+        hiddenLabels,
       })
-    : renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type), { animation: false });
+    : renderStackedTypeBar('chart-composition', slicedPeriods, sliceByType(by_type), { animation: false, hiddenLabels });
   document.querySelectorAll('#composition-view-toggle button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === compositionView);
   });
