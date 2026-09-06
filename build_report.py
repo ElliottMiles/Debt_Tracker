@@ -64,19 +64,57 @@ DURATION_DEFS = [
 # where the "Show history" sparklines start (see historical_snapshots below).
 HISTORY_START = date(1980, 1, 1)
 
-# Same 7 benchmark maturities as DURATION_DEFS, same display labels -- mapped
-# here to Yield_Curve_History.csv's own column names (fetch_yield_curve.py's
-# source labels its columns "1 Mo"/"3 Mo"/etc., not the same strings used for
-# the auction-history side of the app).
+# Every maturity Yield_Curve_History.csv publishes (fetch_yield_curve.py's
+# full MATURITY_ORDER -- same 14 points as CURVE_POINT_DAYS below, in the
+# same ascending order), paired with a plain display label. The CSV's own
+# column names ("1 Mo", "2 Yr", ...) aren't used directly as labels since
+# they don't match the "1 Month"/"2 Year" style used elsewhere in the app.
+# This list is intentionally separate from CURVE_POINT_DAYS: that one drives
+# refi-rate nearest-matching (a different job) and shouldn't have to change
+# in lockstep with what this chart chooses to display.
 YIELD_CURVE_DURATIONS = [
     ("1 Month", "1 Mo"),
+    ("1.5 Month", "1.5 Month"),
+    ("2 Month", "2 Mo"),
     ("3 Month", "3 Mo"),
+    ("4 Month", "4 Mo"),
+    ("6 Month", "6 Mo"),
     ("1 Year", "1 Yr"),
     ("2 Year", "2 Yr"),
+    ("3 Year", "3 Yr"),
     ("5 Year", "5 Yr"),
+    ("7 Year", "7 Yr"),
     ("10 Year", "10 Yr"),
+    ("20 Year", "20 Yr"),
     ("30 Year", "30 Yr"),
 ]
+
+# Every point Yield_Curve_History.csv publishes (fetch_yield_curve.py's full
+# MATURITY_ORDER, not just the 7 benchmarks the live plot above shows),
+# paired with its approximate length in days -- ascending, so a tie in
+# nearest-match resolves to the first (shorter) entry via min()'s stable
+# tie-break. Used by current_refi_rate to match ANY maturing security's own
+# term (6-Week, 17-Week, 3-Year, a Cash Management Bill, ...) to the closest
+# point actually on the curve, not just the 7 benchmark terms.
+CURVE_POINT_DAYS = [
+    ("1 Mo", 30), ("1.5 Month", 45), ("2 Mo", 60), ("3 Mo", 91), ("4 Mo", 122), ("6 Mo", 182),
+    ("1 Yr", 365), ("2 Yr", 730), ("3 Yr", 1095), ("5 Yr", 1825), ("7 Yr", 2555), ("10 Yr", 3650),
+    ("20 Yr", 7300), ("30 Yr", 10950),
+]
+
+# Types the daily par yield curve doesn't cover at all, at any maturity: TIPS
+# quote a *real* yield (the curve is nominal-only) and FRN pays a floating
+# rate (there's no fixed-term point on a yield curve for it). Everything
+# else (Bill, Note, Bond, CMB) is a plain nominal fixed-rate instrument the
+# curve does cover, at whatever its actual term-in-days works out to.
+CURVE_UNCOVERED_TYPES = {"TIPS", "FRN"}
+
+
+def nearest_curve_rate(term_days, latest_by_maturity):
+    if pd.isna(term_days):
+        return None
+    label = min(CURVE_POINT_DAYS, key=lambda pair: abs(term_days - pair[1]))[0]
+    return latest_by_maturity.get(label)
 
 
 def bucket_for_days(days):
@@ -113,11 +151,56 @@ def load_yield_curve():
             values[label] = [None if pd.isna(v) else round(float(v), 3) for v in df[column]]
         else:
             values[label] = [None] * len(df)
+    # Latest available rate for EVERY maturity this file publishes, not just
+    # the 7 benchmark points the plot above shows -- used by
+    # current_refi_rate to match a maturing security's own term to the
+    # nearest point on the full curve (see CURVE_POINT_DAYS).
+    latest_by_maturity = {}
+    for column in df.columns:
+        if column == "date":
+            continue
+        non_null = df[column].dropna()
+        latest_by_maturity[column] = round(float(non_null.iloc[-1]), 3) if len(non_null) else None
+
     return {
         "dates": dates,
         "durations": [label for label, _ in YIELD_CURVE_DURATIONS],
         "values": values,
+        "latest_by_maturity": latest_by_maturity,
     }
+
+
+def current_refi_rate(types, terms, term_days, auction_rate_by_type_term, latest_by_maturity):
+    """Today's rate for refinancing a security of this (type, term) -- the
+    input to the "Refinancing Cost Impact" section and the maturities
+    table's "Refi. rate" column.
+
+    Uses the daily Treasury par yield curve for every nominal fixed-rate
+    security (Bill, Note, Bond, CMB), matched to whichever point on the full
+    published curve is nearest to that security's own actual term in days
+    (see CURVE_POINT_DAYS) -- not just the 7 benchmark maturities the live
+    plot shows. The curve is updated every business day, whereas the
+    alternative (the most recent auction of the same type+term) is only as
+    fresh as that term's own auction calendar -- weekly for Bills, but
+    monthly for many Notes/Bonds -- and the two can differ by several basis
+    points even when both are current (the par curve is a secondary-market-
+    based estimate of what a new security would yield today; an auction
+    result is one specific discrete clearing price from whenever that
+    auction last happened).
+
+    Falls back to the most recent auction of the same (type, term) only for
+    what the curve can't represent at all: TIPS (a *real* yield, not
+    nominal) and FRN (a floating rate, not a fixed-term curve point) -- see
+    CURVE_UNCOVERED_TYPES.
+    """
+    result = []
+    for sec_type, term, days in zip(types, terms, term_days):
+        curve_rate = None if sec_type in CURVE_UNCOVERED_TYPES else nearest_curve_rate(days, latest_by_maturity)
+        if curve_rate is not None:
+            result.append(curve_rate)
+        else:
+            result.append(auction_rate_by_type_term.get(f"{sec_type} {term}"))
+    return result
 
 
 def compute_effective_rate(df):
@@ -393,8 +476,13 @@ def main():
         .groupby("_type_term_key")["effective_rate_pct"]
         .last()
     )
+    latest_by_maturity = yield_curve["latest_by_maturity"]
     maturing_12mo = outstanding[outstanding["days_to_maturity"] <= 365].copy()
-    maturing_12mo["current_term_rate"] = (maturing_12mo["type"] + " " + maturing_12mo["term"]).map(latest_rate_by_type_term)
+    maturing_12mo_term_days = (maturing_12mo["maturity_date"] - maturing_12mo["issue_date"]).dt.days
+    maturing_12mo["current_term_rate"] = current_refi_rate(
+        maturing_12mo["type"], maturing_12mo["term"], maturing_12mo_term_days,
+        latest_rate_by_type_term, latest_by_maturity,
+    )
     matched = maturing_12mo.dropna(subset=["effective_rate_pct", "current_term_rate"])
     matched_amount = float(matched["total_accepted"].sum())
     total_maturing_12mo = float(maturing_12mo["total_accepted"].sum())
@@ -419,13 +507,23 @@ def main():
         amount=("total_accepted", "sum"),
         rate_weight=("_rate_weight2", "sum"),
         rate_component=("_rate_component2", "sum"),
+        # The *original* issue date (earliest of this CUSIP's own auction +
+        # any reopenings), so a reopened security's term-in-days still
+        # reflects its true original term (e.g. still ~10 years for a
+        # 10-Year Note) rather than the much shorter span left as of
+        # whichever reopening happened most recently.
+        orig_issue_date=("issue_date", "min"),
     )
     top_grp["rate_pct"] = top_grp["rate_component"] / top_grp["rate_weight"]
+    top_grp_term_days = (top_grp["maturity_date"] - top_grp["orig_issue_date"]).dt.days
     # Purely hypothetical "if this exact tranche were refinanced today at the
-    # same term" rate -- the most recent auction of the same (type, term)
-    # pair, same lookup used for the aggregate refinancing-cost-impact
-    # section above (see the note there on why type is part of the key).
-    top_grp["refi_rate_pct"] = (top_grp["type"] + " " + top_grp["term"]).map(latest_rate_by_type_term)
+    # same term" rate -- same current_refi_rate used by the aggregate
+    # refinancing-cost-impact section above (par yield curve where available,
+    # most recent same-(type,term) auction otherwise).
+    top_grp["refi_rate_pct"] = current_refi_rate(
+        top_grp["type"], top_grp["term"], top_grp_term_days,
+        latest_rate_by_type_term, latest_by_maturity,
+    )
     top_grp = top_grp.sort_values("amount", ascending=False).head(20)
     top_maturities = [
         {
@@ -533,13 +631,16 @@ def main():
             "obligations rather than a cost-of-borrowing comparison.",
             "FRN rates are approximated as that auction's fixed spread plus the most recent 13-week Bill rate "
             "at the time — a proxy for a rate that actually floats weekly.",
-            "“Refinancing cost impact” compares maturing debt's own rate at issuance to the most recent "
-            "auction of the same term — a simplified proxy, not an official Treasury estimate. Covers "
-            f"{coverage_pct:.1f}% of debt maturing in the next 12 months (the rest has no directly comparable "
-            "recent auction of the same term).",
+            "“Refinancing cost impact” compares maturing debt's own rate at issuance to today's rate for the "
+            "same term — the daily Treasury par yield curve, matched to the closest point on the full "
+            "published curve by the security's actual term in days (not just the 7 benchmark maturities the "
+            "chart above shows), for every nominal type (Bill, Note, Bond, CMB). TIPS and FRN aren't on that "
+            "curve at all, so those fall back to the most recent auction of the same term instead. A "
+            f"simplified proxy, not an official Treasury estimate. Covers {coverage_pct:.1f}% of debt maturing "
+            "in the next 12 months (the rest has no directly comparable current rate).",
             "The “Refi. rate” column on the maturities table is the same kind of hypothetical, applied per "
-            "tranche: what a new auction of that same term is yielding today, not a prediction of what will "
-            "actually happen when that security is refinanced.",
+            "tranche, using the same par-curve-first, most-recent-auction-otherwise rate described above — "
+            "not a prediction of what will actually happen when that security is refinanced.",
             "The “Show history” sparklines replay each metric using only securities issued by that date. "
             "History before roughly 2010 understates totals slightly, since debt issued before 1980 (when "
             "this dataset starts) that was still outstanding in the 1980s–2000s isn't captured.",

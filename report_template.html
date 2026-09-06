@@ -548,7 +548,7 @@
   <section class="card">
     <h2>The Yield Curve</h2>
     <p class="section-sub">
-      The par yield curve across the seven benchmark maturities, for any trading day since 1990.
+      The par yield curve across all 14 maturities Treasury publishes, for any trading day since 1990.
       Drag the slider or pick an exact date.
     </p>
     <figure class="chart-figure">
@@ -637,8 +637,9 @@
     <h2>Largest Upcoming Maturities</h2>
     <p class="section-sub">
       The largest individual maturities due in the next 2 weeks (reopenings of the same CUSIP combined).
-      “Refi. rate” is hypothetical: what a new auction of the same term is yielding today, as if that exact
-      tranche were replaced at the same duration — not a prediction of what will actually happen.
+      “Refi. rate” is hypothetical: today's rate for the same term — from the daily Treasury par yield
+      curve where available, the most recent auction of that term otherwise — as if that exact tranche
+      were replaced at the same duration. Not a prediction of what will actually happen.
     </p>
     <div class="table-wrap">
       <table id="top-maturities-table">
@@ -1573,7 +1574,7 @@ function renderRefinancingCallout() {
     grid.appendChild(div);
   });
   document.getElementById('refinancing-footnote').textContent =
-    `Based on the ${formatPct(r.coverage_pct, 1)} of debt maturing in the next 12 months that has a directly comparable recent auction of the same term. Not an official Treasury estimate.`;
+    `Based on the ${formatPct(r.coverage_pct, 1)} of debt maturing in the next 12 months that has a directly comparable current rate (the daily par yield curve, or a recent auction of the same term). Not an official Treasury estimate.`;
 }
 
 let topMaturitiesSort = { key: 'amount', dir: -1 };
