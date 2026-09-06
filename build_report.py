@@ -408,10 +408,12 @@ def main():
     )
     coverage_pct = round(matched_amount / total_maturing_12mo * 100, 1) if total_maturing_12mo else 0.0
 
-    # ---- top individual maturities (reopenings of the same CUSIP combined) ----
+    # ---- top individual maturities due in the next 2 weeks (reopenings of
+    # the same CUSIP combined; up to 20, fewer if fewer than 20 qualify) ----
     outstanding["_rate_weight2"] = outstanding["_rate_weight"]
     outstanding["_rate_component2"] = outstanding["_rate_component"]
-    top_grp = outstanding.groupby(
+    due_soon = outstanding[outstanding["days_to_maturity"] <= 14]
+    top_grp = due_soon.groupby(
         ["cusip", "type", "term", "security_term", "maturity_date"], as_index=False
     ).agg(
         amount=("total_accepted", "sum"),
