@@ -158,6 +158,34 @@ def compute_effective_rate(df):
     return rate
 
 
+def compute_cash_interest_rate(df, effective_rate):
+    """The rate that determines actual cash interest obligations -- used only
+    for the annual-interest-cost figures, never for the rate/cost-of-borrowing
+    comparisons elsewhere in this app (those all use effective_rate_pct).
+
+    Note/Bond/TIPS -> the literal coupon (interest_rate): the fixed cash
+                      payment made twice a year for the security's whole
+                      life, set at original issuance and unrelated to the
+                      price actually paid at auction. This is where it
+                      differs from effective_rate_pct's high_yield, which
+                      reflects price paid and is the right basis for
+                      cross-time/cross-issue comparisons -- but a reopening
+                      priced away from par (routine, not an edge case: ~95%
+                      of outstanding Note/Bond/TIPS records at the time this
+                      was written) means yield isn't what's actually
+                      disbursed in cash.
+    Bill/CMB, FRN  -> same as effective_rate_pct. Bills/CMB have no coupon at
+                      all (the discount to face value *is* the return, so
+                      there's nothing else to use); FRN's rate genuinely
+                      floats and effective_rate_pct is already the best
+                      available estimate of what it's currently paying.
+    """
+    rate = effective_rate.copy()
+    note_like = df["type"].isin(["Note", "Bond", "TIPS"])
+    rate[note_like] = df.loc[note_like, "interest_rate"]
+    return rate
+
+
 def weighted_avg(amounts, rates):
     weight = amounts.where(rates.notna())
     total = weight.sum()
@@ -181,9 +209,13 @@ def historical_snapshots(df, dates):
     For each date D, use only securities issued by then (issue_date <= D)
     that hadn't yet matured as of D (maturity_date > D) -- i.e. exactly what
     this dashboard would have shown on D, using the same definitions as the
-    live summary tiles. Each security's own effective_rate_pct never changes
-    (it's fixed at auction); only which securities are "outstanding as of D"
-    and their years-to-maturity as of D change per snapshot.
+    live summary tiles. Each security's own effective_rate_pct and
+    cash_interest_rate_pct never change (both are fixed at auction); only
+    which securities are "outstanding as of D" and their years-to-maturity
+    as of D change per snapshot. weighted_avg_rate_pct uses effective_rate_pct
+    (yield, for cost-of-borrowing comparability); annual_interest_cost uses
+    cash_interest_rate_pct (coupon for Note/Bond/TIPS, i.e. actual cash
+    obligations) -- see compute_cash_interest_rate for why they differ.
     """
     history = {
         "dates": [], "total_outstanding": [], "weighted_avg_rate_pct": [], "annual_interest_cost": [],
@@ -208,7 +240,7 @@ def historical_snapshots(df, dates):
         days_to_mat = (snap["maturity_date"] - d).dt.days
         years_to_mat = days_to_mat / 365.25
         w_rate = weighted_avg(snap["total_accepted"], snap["effective_rate_pct"])
-        annual_interest = float((snap["total_accepted"] * snap["effective_rate_pct"]).sum() / 100)
+        annual_interest = float((snap["total_accepted"] * snap["cash_interest_rate_pct"]).sum() / 100)
         w_mat = float((snap["total_accepted"] * years_to_mat).sum() / total)
         amt_12mo = float(snap.loc[days_to_mat <= 365, "total_accepted"].sum())
         amt_90d = float(snap.loc[days_to_mat <= 90, "total_accepted"].sum())
@@ -227,6 +259,7 @@ def historical_snapshots(df, dates):
 def main():
     df = load_auctions()
     df["effective_rate_pct"] = compute_effective_rate(df)
+    df["cash_interest_rate_pct"] = compute_cash_interest_rate(df, df["effective_rate_pct"])
     yield_curve = load_yield_curve()
 
     today_date = date.today()
@@ -275,11 +308,15 @@ def main():
         for w, wr in zip(bucket_rates["w"], bucket_rates["wr"])
     ]
 
-    # Annual interest cost implied by currently outstanding debt at its own
-    # rates -- sum(face value x rate) over the same rated rows weighted_avg_rate
-    # uses, not total_outstanding x weighted_avg_rate (that would silently
-    # misstate things if any outstanding row ever lacks a rate).
-    annual_interest_cost = float(outstanding["_rate_component"].sum() / 100)
+    # Annual interest cost implied by currently outstanding debt -- sum(face
+    # value x rate) over each row, not total_outstanding x weighted_avg_rate
+    # (that would silently misstate things if any outstanding row ever lacks
+    # a rate). Uses cash_interest_rate_pct (coupon for Note/Bond/TIPS), NOT
+    # effective_rate_pct (yield) -- this is a dollar "obligations" figure, so
+    # it needs the actual cash payment, not the yield used for cost-of-
+    # borrowing comparisons everywhere else. See compute_cash_interest_rate.
+    outstanding["_cash_rate_component"] = outstanding["total_accepted"] * outstanding["cash_interest_rate_pct"]
+    annual_interest_cost = float(outstanding["_cash_rate_component"].sum() / 100)
 
     # ---- debt composition over time: outstanding-by-type, one point-in-time
     # snapshot per calendar year (same issue_date<=D & maturity_date>D replay
@@ -489,7 +526,9 @@ def main():
             "Treasury's debt buyback program (started 2024) is not modeled; a small amount of repurchased "
             "debt may still appear as outstanding here.",
             "Rates are shown on a comparable annualized basis: bond-equivalent yield for Bills/CMBs, auction "
-            "yield for Notes/Bonds/TIPS.",
+            "yield for Notes/Bonds/TIPS — except the “$X/yr in interest” figure, which uses each Note/Bond/"
+            "TIPS's literal coupon rate instead of its yield, since it represents actual cash interest "
+            "obligations rather than a cost-of-borrowing comparison.",
             "FRN rates are approximated as that auction's fixed spread plus the most recent 13-week Bill rate "
             "at the time — a proxy for a rate that actually floats weekly.",
             "“Refinancing cost impact” compares maturing debt's own rate at issuance to the most recent "

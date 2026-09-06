@@ -3,10 +3,11 @@ Fetches the U.S. Treasury Daily Par Yield Curve Rates (the "Constant Maturity
 Treasury" series -- 1 Month through 30 Year, one row per business day) and
 saves it to Yield_Curve_History.csv.
 
-Not currently read by build_report.py or shown in the report -- this is a
-peer fetch script to fetch_auctions.py, kept separate because the two data
-sources have nothing in common (different API, different pagination and
-incremental strategy, different output shape). See fetch_all.py to run both.
+Read by build_report.py (load_yield_curve) and shown in the report's yield-
+curve section. This is a peer fetch script to fetch_auctions.py, kept separate
+because the two data sources have nothing in common (different API, different
+pagination and incremental strategy, different output shape). See
+fetch_all.py to run both.
 
 Source note: this dataset is NOT available on the newer JSON API at
 api.fiscaldata.treasury.gov (checked directly -- 404). It's only published
