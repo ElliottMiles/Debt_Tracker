@@ -841,6 +841,8 @@ function renderMetricLine(canvasOrId, labels, values, opts = {}) {
   const {
     sparse = false, pointRadius,
     formatY = (v) => v, formatTooltip = formatY, emptyLabel = 'No data',
+    formatX = (label) => label,
+    maxTicksLimit,
     // See the matching note in renderStackedTypeBar -- same reasoning.
     animation = true,
   } = opts;
@@ -873,7 +875,14 @@ function renderMetricLine(canvasOrId, labels, values, opts = {}) {
       animation,
       interaction: { mode: 'index', intersect: false },
       scales: {
-        x: { grid: { display: false }, ticks: { color: ink.muted, autoSkip: true, maxTicksLimit: sparse ? 14 : 10, maxRotation: 0 } },
+        x: {
+          grid: { display: false },
+          ticks: {
+            color: ink.muted, autoSkip: true, maxRotation: 0,
+            maxTicksLimit: maxTicksLimit ?? (sparse ? 14 : 10),
+            callback: (val, index) => formatX(labels[index]),
+          },
+        },
         y: { grid: { color: ink.grid }, border: { display: false }, ticks: { color: ink.muted, callback: formatY } },
       },
       plugins: {
@@ -1413,6 +1422,8 @@ function renderStatHistoryView(config, viewId) {
     pointRadius: 0,
     formatY: view.formatY,
     formatTooltip: view.formatTooltip,
+    formatX: (label) => label.slice(0, 4), // monthly dates -> year only, so the axis isn't a wall of "YYYY-MM-DD"
+    maxTicksLimit: 10, // evenly spaced years rather than filling every available tick slot
     emptyLabel: 'No data yet',
     animation: false,
   });
