@@ -572,8 +572,8 @@
       caveats below.
     </p>
     <div class="chart-view-toggle" id="composition-view-toggle">
-      <button type="button" data-view="pct" class="active">%</button>
-      <button type="button" data-view="amount">$</button>
+      <button type="button" data-view="amount" class="active">$</button>
+      <button type="button" data-view="pct">%</button>
     </div>
     <figure class="chart-figure">
       <canvas id="chart-composition" role="img" aria-label="Stacked bar chart of outstanding debt by security type, by year"></canvas>
@@ -1385,8 +1385,8 @@ const STAT_TILES = [
     value: (s) => formatPct(s.weighted_avg_rate_pct),
     sub: (s) => formatUSD(s.annual_interest_cost, 2) + '/yr in interest',
     views: [
-      { id: 'rate', label: '%', key: 'weighted_avg_rate_pct', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
       { id: 'dollar', label: '$', key: 'annual_interest_cost', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 2) },
+      { id: 'rate', label: '%', key: 'weighted_avg_rate_pct', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
     ],
   },
   {
@@ -1401,8 +1401,8 @@ const STAT_TILES = [
     value: (s) => formatPct(s.pct_maturing_12mo),
     sub: (s) => formatUSD(s.amount_maturing_12mo, 2) + ' maturing',
     views: [
-      { id: 'pct', label: '%', key: 'pct_maturing_12mo', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
       { id: 'amount', label: '$', key: 'amount_maturing_12mo', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 2) },
+      { id: 'pct', label: '%', key: 'pct_maturing_12mo', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
     ],
   },
   {
@@ -1410,8 +1410,8 @@ const STAT_TILES = [
     value: (s) => formatPct(s.pct_maturing_90d),
     sub: (s) => formatUSD(s.amount_maturing_90d, 1) + ' maturing',
     views: [
-      { id: 'pct', label: '%', key: 'pct_maturing_90d', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
       { id: 'amount', label: '$', key: 'amount_maturing_90d', formatY: (v) => formatUSD(v, 1), formatTooltip: (v) => formatUSD(v, 1) },
+      { id: 'pct', label: '%', key: 'pct_maturing_90d', formatY: (v) => v.toFixed(1) + '%', formatTooltip: (v) => formatPct(v) },
     ],
   },
 ];
@@ -1572,7 +1572,7 @@ function tableForComposition() {
 }
 
 let compositionChart = null;
-let compositionView = 'pct';
+let compositionView = 'amount';
 let compositionRange = null; // [startIdx, endIdx], or null for full history
 function renderCompositionChart() {
   const { periods, by_type, by_type_pct } = REPORT_DATA.composition;
