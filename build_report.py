@@ -21,6 +21,7 @@ import pandas as pd
 
 EXCEL_PATH = Path(__file__).resolve().parent / "Treasury_Auction_History.xlsx"
 YIELD_CURVE_PATH = Path(__file__).resolve().parent / "Yield_Curve_History.csv"
+BUYBACK_PATH = Path(__file__).resolve().parent / "Treasury_Buyback_History.csv"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "report_template.html"
 OUTPUT_PATH = Path(__file__).resolve().parent / "Debt_Report.html"
 SHEET_NAME = "Auctions"
@@ -146,6 +147,80 @@ def load_auctions():
     # Stub rows (auction announced but not yet held) carry no results yet --
     # they're not part of any debt-structure calculation.
     return df[df["total_accepted"].notna()].copy()
+
+
+def load_buybacks():
+    """Read Treasury_Buyback_History.csv (from fetch_buybacks.py). Required,
+    same as load_yield_curve -- fetch_all.py runs all three fetch scripts
+    together now, so this being missing means setup isn't finished rather
+    than something to silently work around."""
+    if not BUYBACK_PATH.exists():
+        raise FileNotFoundError(
+            f"{BUYBACK_PATH.name} not found. Run fetch_buybacks.py first."
+        )
+    df = pd.read_csv(BUYBACK_PATH)
+    for col in ("operation_date", "settlement_date", "maturity_date"):
+        df[col] = pd.to_datetime(df[col])
+    return df
+
+
+def apply_buybacks(df, buybacks, cusip_lookup):
+    """Returns a copy of df with one synthetic negative-total_accepted row
+    added per buyback (par_amt_accepted > 0), so every existing "outstanding
+    as of D" replay (issue_date <= D & maturity_date > D, summed on
+    total_accepted) automatically nets out repurchased face value with no
+    other change to that replay logic.
+
+    The trick: the synthetic row gets the SAME maturity_date as the real
+    security, but issue_date = the buyback's settlement_date. Before
+    settlement, only the real row(s) count (full original amount). From
+    settlement through the security's real maturity, both the real row(s)
+    and this negative row count, netting to the reduced amount. After
+    maturity, neither counts -- they share a maturity_date, so both drop out
+    of the filter together. No per-reopening-lot allocation is needed or
+    attempted: Treasury doesn't publish which specific reopening tranche of
+    a CUSIP was bought back, so this treats a CUSIP's buybacks as reducing
+    its combined outstanding total rather than guessing an allocation. A
+    synthetic row's rate fields (used for weighted-average-rate calcs) are
+    borrowed from that CUSIP's *original* auction, as the simplest available
+    proxy for "the rate of the debt being retired" -- a reopening of the
+    same CUSIP typically prices very close to the original anyway.
+
+    Only used to build the outstanding-*stock* views (composition, maturity
+    wall, weighted averages, the sparklines, refinancing gap, top
+    maturities) -- never for displays of real historical *events*
+    (recent_auctions, duration_detail, issuance_mix, historical_rate_trend),
+    which must keep reading the raw, unmodified df.
+
+    A handful of buybacks (all from the 2000-2002 program, see caveats) name
+    a CUSIP older than this dataset's own 1980 start, with no match in
+    cusip_lookup -- skipped, since a CUSIP never counted as outstanding here
+    in the first place needs no correction.
+    """
+    accepted = buybacks[buybacks["par_amt_accepted"] > 0]
+    matched = accepted[accepted["cusip"].isin(cusip_lookup.index)]
+    skipped = len(accepted) - len(matched)
+    if skipped:
+        print(
+            f"Note: {skipped} buyback record(s) reference a CUSIP not in "
+            "Treasury_Auction_History.xlsx (pre-1980 legacy debt) -- skipped."
+        )
+    if matched.empty:
+        return df
+
+    src = cusip_lookup.loc[matched["cusip"]]
+    neg_rows = pd.DataFrame({
+        "cusip": matched["cusip"].to_numpy(),
+        "type": src["type"].to_numpy(),
+        "term": src["term"].to_numpy(),
+        "security_term": src["security_term"].to_numpy(),
+        "issue_date": matched["settlement_date"].to_numpy(),
+        "maturity_date": src["maturity_date"].to_numpy(),
+        "total_accepted": -matched["par_amt_accepted"].to_numpy(),
+        "effective_rate_pct": src["effective_rate_pct"].to_numpy(),
+        "cash_interest_rate_pct": src["cash_interest_rate_pct"].to_numpy(),
+    })
+    return pd.concat([df, neg_rows], ignore_index=True)
 
 
 def load_yield_curve():
@@ -322,7 +397,7 @@ def historical_snapshots(df, dates):
     }
     for d in dates:
         snap = df[(df["issue_date"] <= d) & (df["maturity_date"] > d)]
-        total = float(snap["total_accepted"].sum())
+        total = max(0.0, float(snap["total_accepted"].sum()))
         history["dates"].append(d.strftime("%Y-%m-%d"))
         history["total_outstanding"].append(round(total, 0))
         if total <= 0:
@@ -359,6 +434,19 @@ def main():
     df["effective_rate_pct"] = compute_effective_rate(df)
     df["cash_interest_rate_pct"] = compute_cash_interest_rate(df, df["effective_rate_pct"])
     yield_curve = load_yield_curve()
+    buybacks = load_buybacks()
+
+    # One row per CUSIP, taken from its earliest (original) auction -- reused
+    # to look up a buyback's type/term/maturity/rate (none of which are on
+    # the buyback feed itself, see fetch_buybacks.py) for apply_buybacks
+    # below, the buybacks-over-time chart, and the recent-buybacks table.
+    cusip_lookup = df.sort_values("issue_date").groupby("cusip").first()
+
+    # df_net -- df with buybacks netted out -- is used ONLY for outstanding-
+    # *stock* calculations from here on (see apply_buybacks' docstring).
+    # Displays of real historical *events* (recent_auctions, duration_detail,
+    # issuance_mix, historical_rate_trend) keep reading the raw df below.
+    df_net = apply_buybacks(df, buybacks, cusip_lookup)
 
     today_date = date.today()
     today = pd.Timestamp(today_date)
@@ -366,7 +454,7 @@ def main():
     # "outstanding as of D" exactly, so the live tiles and the point-in-time
     # history line up (a security auctioned but not yet issued isn't counted
     # as outstanding debt yet either way).
-    outstanding = df[(df["issue_date"] <= today) & (df["maturity_date"] > today)].copy()
+    outstanding = df_net[(df_net["issue_date"] <= today) & (df_net["maturity_date"] > today)].copy()
     outstanding["days_to_maturity"] = (outstanding["maturity_date"] - today).dt.days
     outstanding["years_to_maturity"] = outstanding["days_to_maturity"] / 365.25
     outstanding["bucket"] = outstanding["days_to_maturity"].apply(bucket_for_days)
@@ -389,9 +477,13 @@ def main():
     pct_maturing_90d = amount_maturing_90d / total_outstanding * 100
 
     # ---- maturity wall: $ outstanding per bucket, split by type ----
+    # clip(lower=0): a (bucket, type) cell going negative would mean a
+    # buyback-adjustment row landed in a bucket/type combination with no
+    # matching positive amount left to net against -- shouldn't happen, but
+    # guards the display against ever showing negative outstanding debt.
     wall_pivot = outstanding.pivot_table(
         index="bucket", columns="type", values="total_accepted", aggfunc="sum", fill_value=0
-    ).reindex(index=BUCKET_LABELS, columns=TYPE_ORDER, fill_value=0)
+    ).reindex(index=BUCKET_LABELS, columns=TYPE_ORDER, fill_value=0).clip(lower=0)
     by_type_amounts = {t: [float(v) for v in wall_pivot[t]] for t in TYPE_ORDER}
 
     # ---- weighted-average rate per bucket (separate chart -- see report_template.html for why not a second axis) ----
@@ -430,8 +522,8 @@ def main():
 
     composition_by_type = {t: [] for t in TYPE_ORDER}
     for d in composition_dates:
-        snap = df[(df["issue_date"] <= d) & (df["maturity_date"] > d)]
-        totals = snap.groupby("type")["total_accepted"].sum()
+        snap = df_net[(df_net["issue_date"] <= d) & (df_net["maturity_date"] > d)]
+        totals = snap.groupby("type")["total_accepted"].sum().clip(lower=0)
         for t in TYPE_ORDER:
             composition_by_type[t].append(float(totals.get(t, 0.0)))
 
@@ -468,6 +560,39 @@ def main():
     issuance_pivot_pct = issuance_pivot.div(issuance_pivot.sum(axis=1), axis=0) * 100
     issuance_by_type_pct = {t: [round(float(v), 2) for v in issuance_pivot_pct[t]] for t in TYPE_ORDER}
 
+    # ---- debt buybacks over time: $ repurchased per month, by type, full
+    # history. Unlike composition/the sparklines, this reads the raw
+    # buybacks feed directly (a log of real buyback events, same spirit as
+    # issuance_mix), not df_net -- it's not an outstanding-stock replay.
+    # Grouped by operation_date (when Treasury actually bought), not
+    # settlement_date (when it counts toward outstanding elsewhere in this
+    # file) -- this chart is about buyback *activity*, so the date a user
+    # would recognize as "when this happened" is the more natural axis.
+    # Every calendar month from the first-ever operation through the current
+    # month is included, even the many with zero activity (the 2003-2013
+    # gap, the sparse 2014-2023 test-sized operations) -- real, honest
+    # history, not trimmed for looking sparse. See the module docstring for
+    # cusip_lookup on why buybacks needs a join for type at all.
+    buybacks_typed = buybacks[buybacks["cusip"].isin(cusip_lookup.index)].copy()
+    buybacks_typed["type"] = cusip_lookup.loc[buybacks_typed["cusip"], "type"].to_numpy()
+    buybacks_typed["month"] = buybacks_typed["operation_date"].dt.to_period("M").astype(str)
+    if not buybacks_typed.empty:
+        buyback_months = pd.period_range(
+            buybacks_typed["operation_date"].min().to_period("M"), today.to_period("M"), freq="M"
+        ).astype(str)
+    else:
+        buyback_months = pd.Index([], dtype=str)
+    buyback_pivot = buybacks_typed.pivot_table(
+        index="month", columns="type", values="par_amt_accepted", aggfunc="sum", fill_value=0
+    ).reindex(index=buyback_months, columns=TYPE_ORDER, fill_value=0)
+    buyback_periods = list(buyback_pivot.index)
+    buyback_by_type = {t: [float(v) for v in buyback_pivot[t]] for t in TYPE_ORDER}
+    buyback_month_total = buyback_pivot.sum(axis=1)
+    buyback_by_type_pct = {
+        t: [round(float(v / tot) * 100, 2) if tot else 0.0 for v, tot in zip(buyback_pivot[t], buyback_month_total)]
+        for t in TYPE_ORDER
+    }
+
     # ---- auction history by benchmark maturity: every individual auction
     # (raw, not aggregated) for each of the 7 durations, full history ----
     duration_series = {}
@@ -501,7 +626,15 @@ def main():
     )
     latest_by_maturity = yield_curve["latest_by_maturity"]
     maturing_12mo = outstanding[outstanding["days_to_maturity"] <= 365].copy()
-    maturing_12mo_term_days = (maturing_12mo["maturity_date"] - maturing_12mo["issue_date"]).dt.days
+    # Term-in-days must be measured from each CUSIP's TRUE original issue
+    # date, not maturing_12mo's own issue_date column -- for a buyback-
+    # adjustment row, that column holds the buyback's settlement date (see
+    # apply_buybacks), which would understate a partly-bought-back security's
+    # term and misdirect its refi-rate match. cusip_lookup always has the
+    # real original issue date, for every row including synthetic ones.
+    orig_issue_date = cusip_lookup.loc[maturing_12mo["cusip"], "issue_date"]
+    orig_issue_date.index = maturing_12mo.index
+    maturing_12mo_term_days = (maturing_12mo["maturity_date"] - orig_issue_date).dt.days
     maturing_12mo["current_term_rate"] = current_refi_rate(
         maturing_12mo["type"], maturing_12mo["term"], maturing_12mo_term_days,
         latest_rate_by_type_term, latest_by_maturity,
@@ -580,12 +713,36 @@ def main():
         for row in recent.itertuples()
     ]
 
+    # ---- recent buybacks: every individual buyback operation result in the
+    # last 2 weeks with a nonzero accepted amount (a CUSIP offered but not
+    # accepted in an operation isn't a real event worth logging here), by
+    # operation_date -- same "log of real events" spirit as recent_auctions
+    # above, so this also reads the raw buybacks feed rather than df_net.
+    # cusip_lookup fills in type/term, which aren't on the buyback feed.
+    recent_bb_cutoff = today - pd.Timedelta(days=14)
+    recent_bb = buybacks[
+        (buybacks["operation_date"] >= recent_bb_cutoff) & (buybacks["par_amt_accepted"] > 0)
+    ].sort_values("operation_date", ascending=False)
+    recent_buybacks = [
+        {
+            "cusip": row.cusip,
+            "type": cusip_lookup.loc[row.cusip, "type"] if row.cusip in cusip_lookup.index else None,
+            "term": cusip_lookup.loc[row.cusip, "security_term"] if row.cusip in cusip_lookup.index else None,
+            "operation_date": iso_date(row.operation_date),
+            "maturity_date": iso_date(row.maturity_date),
+            "amount": float(row.par_amt_accepted),
+            "coupon_pct": round(float(row.coupon_rate_pct), 3) if pd.notna(row.coupon_rate_pct) else None,
+            "price": round(float(row.weighted_avg_accepted_price), 3) if pd.notna(row.weighted_avg_accepted_price) else None,
+        }
+        for row in recent_bb.itertuples()
+    ]
+
     # ---- point-in-time history for the "Show history" tile sparklines ----
     # Starts at REPLAY_START, not HISTORY_START -- see REPLAY_START's comment.
     hist_dates = month_start_dates(REPLAY_START, today_date.replace(day=1))
     if hist_dates[-1] != today:
         hist_dates.append(today)
-    history = historical_snapshots(df, hist_dates)
+    history = historical_snapshots(df_net, hist_dates)
 
     data = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -627,6 +784,11 @@ def main():
             "by_type": issuance_by_type,
             "by_type_pct": issuance_by_type_pct,
         },
+        "buybacks_over_time": {
+            "periods": buyback_periods,
+            "by_type": buyback_by_type,
+            "by_type_pct": buyback_by_type_pct,
+        },
         "duration_detail": {
             "durations": [label for label, _, _ in DURATION_DEFS],
             "series": duration_series,
@@ -643,12 +805,19 @@ def main():
         },
         "top_maturities": top_maturities,
         "recent_auctions": recent_auctions,
+        "recent_buybacks": recent_buybacks,
         "type_order": TYPE_ORDER,
         "caveats": [
             "Covers marketable, auctioned Treasury debt only — excludes savings bonds, SLGS, and "
             "intragovernmental holdings, so totals will not match the “total national debt” headline figure.",
-            "Treasury's debt buyback program (started 2024) is not modeled; a small amount of repurchased "
-            "debt may still appear as outstanding here.",
+            "Debt buybacks (Treasury repurchasing already-issued Notes/Bonds/TIPS before maturity) are "
+            "netted out of every “outstanding” figure on this page as of each buyback's settlement date — "
+            "current totals, the maturity wall, composition over time, the sparklines, and refinancing cost "
+            "impact all reflect it. One simplification: Treasury doesn't publish which specific reopening of "
+            "a CUSIP was bought back, so a buyback's rate (for weighted-average purposes) is assumed to be "
+            "that CUSIP's original auction rate, not any particular reopening's. A handful of buybacks from "
+            "the 2000-2002 program (see the “Debt Buybacks Over Time” chart) reference debt issued before "
+            "1980, outside this dataset's own coverage, and are excluded rather than guessed at.",
             "Rates are shown on a comparable annualized basis: bond-equivalent yield for Bills/CMBs, auction "
             "yield for Notes/Bonds/TIPS — except the “$X/yr in interest” figure, which uses each Note/Bond/"
             "TIPS's literal coupon rate instead of its yield, since it represents actual cash interest "
@@ -683,8 +852,12 @@ def main():
 
     output = template.replace(DATA_PLACEHOLDER, json.dumps(data))
     OUTPUT_PATH.write_text(output, encoding="utf-8")
+    # total_accepted < 0 only ever happens on a synthetic buyback-adjustment
+    # row (see apply_buybacks) -- exclude those from the security count, a
+    # correction line-item isn't itself an outstanding security.
+    real_security_count = int((outstanding["total_accepted"] > 0).sum())
     print(
-        f"Wrote {OUTPUT_PATH.name}: {len(outstanding):,} outstanding securities, "
+        f"Wrote {OUTPUT_PATH.name}: {real_security_count:,} outstanding securities, "
         f"${total_outstanding:,.0f} total, as of {date.today()}."
     )
 

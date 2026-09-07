@@ -443,6 +443,20 @@
   #recent-auctions-table th:nth-child(7), #recent-auctions-table td:nth-child(7) { width: 13%; }
   #recent-auctions-table th:nth-child(8), #recent-auctions-table td:nth-child(8) { width: 17%; }
 
+  #recent-buybacks-table { table-layout: fixed; min-width: 640px; }
+  #recent-buybacks-table th, #recent-buybacks-table td { text-align: left; }
+  #recent-buybacks-table th { cursor: pointer; }
+  #recent-buybacks-table th:hover { color: var(--text-primary); }
+  #recent-buybacks-table th.sorted::after { content: " \25BE"; }
+  #recent-buybacks-table th:nth-child(1), #recent-buybacks-table td:nth-child(1) { width: 13%; }
+  #recent-buybacks-table th:nth-child(2), #recent-buybacks-table td:nth-child(2) { width: 11%; }
+  #recent-buybacks-table th:nth-child(3), #recent-buybacks-table td:nth-child(3) { width: 13%; white-space: normal; }
+  #recent-buybacks-table th:nth-child(4), #recent-buybacks-table td:nth-child(4) { width: 13%; }
+  #recent-buybacks-table th:nth-child(5), #recent-buybacks-table td:nth-child(5) { width: 9%; }
+  #recent-buybacks-table th:nth-child(6), #recent-buybacks-table td:nth-child(6) { width: 11%; }
+  #recent-buybacks-table th:nth-child(7), #recent-buybacks-table td:nth-child(7) { width: 13%; }
+  #recent-buybacks-table th:nth-child(8), #recent-buybacks-table td:nth-child(8) { width: 17%; }
+
   .type-dot {
     display: inline-block;
     width: 8px;
@@ -607,6 +621,24 @@
   </section>
 
   <section class="card">
+    <h2>Debt Buybacks Over Time</h2>
+    <p class="section-sub">
+      Par amount Treasury has repurchased before maturity, by month and security type, since the buyback
+      program's original run began in 2000 (see the caveats below for its history — including the 2003-2023
+      gap and small test-sized operations shown here as-is, not smoothed over).
+    </p>
+    <div class="chart-view-toggle" id="buybacks-view-toggle">
+      <button type="button" data-view="amount" class="active">$</button>
+      <button type="button" data-view="pct">%</button>
+    </div>
+    <figure class="chart-figure">
+      <canvas id="chart-buybacks" role="img" aria-label="Stacked bar chart of monthly debt buybacks by security type"></canvas>
+    </figure>
+    <div class="range-slider" id="buybacks-range-slider"></div>
+    <details class="table-toggle"><summary>View data as table</summary><div id="table-buybacks"></div></details>
+  </section>
+
+  <section class="card">
     <h2>Auction History by Maturity</h2>
     <p class="section-sub">
       Every individual auction for the seven benchmark maturities, since 1980. Click a line in the legend
@@ -680,6 +712,31 @@
       </table>
     </div>
     <p class="section-sub" id="recent-auctions-empty" hidden>No auctions in the last 2 weeks.</p>
+  </section>
+
+  <section class="card">
+    <h2>Recent Debt Buybacks</h2>
+    <p class="section-sub">
+      Every CUSIP Treasury actually repurchased (nonzero amount accepted) in a buyback operation held in
+      the last 2 weeks. Price is per $100 face value; coupon is that security's own fixed rate, not this
+      operation's outcome.
+    </p>
+    <div class="table-wrap">
+      <table id="recent-buybacks-table">
+        <thead><tr>
+          <th data-key="operation_date">Operation date</th>
+          <th class="col-text" data-key="type">Type</th>
+          <th class="col-text" data-key="term">Term</th>
+          <th data-key="amount">Amount</th>
+          <th data-key="coupon_pct">Coupon</th>
+          <th data-key="price">Price</th>
+          <th data-key="maturity_date">Maturity date</th>
+          <th class="col-text" data-key="cusip">CUSIP</th>
+        </tr></thead>
+        <tbody id="recent-buybacks-body"></tbody>
+      </table>
+    </div>
+    <p class="section-sub" id="recent-buybacks-empty" hidden>No buybacks in the last 2 weeks.</p>
   </section>
 
   <footer class="report-footer">
@@ -765,6 +822,9 @@ function formatDate(s) {
 }
 function formatRatio(n) {
   return n == null ? '—' : n.toFixed(2) + 'x';
+}
+function formatPrice(n) {
+  return n == null ? '—' : n.toFixed(3);
 }
 
 // ---- Chart helpers -------------------------------------------------------
@@ -1357,6 +1417,53 @@ document.querySelectorAll('#issuance-mix-view-toggle button').forEach((btn) => {
   });
 }
 
+function tableForBuybacks() {
+  const { periods, by_type } = REPORT_DATA.buybacks_over_time;
+  const types = TYPE_ORDER.filter((t) => by_type[t] && by_type[t].some((v) => v > 0));
+  const rows = periods.map((m, i) => {
+    const vals = types.map((t) => formatUSD(by_type[t][i], 1));
+    const total = types.reduce((s, t) => s + by_type[t][i], 0);
+    return [m, ...vals, formatUSD(total, 1)];
+  });
+  buildSimpleTable('table-buybacks', ['Month', ...types, 'Total'], rows);
+}
+
+let buybacksChart = null;
+let buybacksView = 'amount';
+let buybacksRange = null; // [startIdx, endIdx], or null for full history
+function renderBuybacksChart() {
+  const { periods, by_type, by_type_pct } = REPORT_DATA.buybacks_over_time;
+  const [s, e] = buybacksRange ?? [0, periods.length - 1];
+  const slicedPeriods = periods.slice(s, e + 1);
+  const sliceByType = (obj) => Object.fromEntries(TYPE_ORDER.map((t) => [t, obj[t].slice(s, e + 1)]));
+
+  const hiddenLabels = captureHiddenByKey(buybacksChart, (ds) => ds.label);
+  if (buybacksChart) buybacksChart.destroy();
+  buybacksChart = buybacksView === 'pct'
+    ? renderStackedTypeBar('chart-buybacks', slicedPeriods, sliceByType(by_type_pct), {
+        max: 100,
+        formatY: (v) => v.toFixed(0) + '%',
+        formatTooltip: (v) => formatPct(v, 1),
+        animation: false,
+        hiddenLabels,
+      })
+    : renderStackedTypeBar('chart-buybacks', slicedPeriods, sliceByType(by_type), { animation: false, hiddenLabels });
+  document.querySelectorAll('#buybacks-view-toggle button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === buybacksView);
+  });
+}
+document.querySelectorAll('#buybacks-view-toggle button').forEach((btn) => {
+  btn.addEventListener('click', () => { buybacksView = btn.dataset.view; renderBuybacksChart(); });
+});
+{
+  const { periods } = REPORT_DATA.buybacks_over_time;
+  createDualRangeSlider(document.getElementById('buybacks-range-slider'), {
+    min: 0, max: periods.length - 1, valueMin: 0, valueMax: periods.length - 1,
+    formatLabel: (i) => periods[Math.round(i)],
+    onChange: (s, e) => { buybacksRange = [Math.round(s), Math.round(e)]; renderBuybacksChart(); },
+  });
+}
+
 // ---- Non-chart sections -----------------------------------------------
 function renderHeaderMeta() {
   const dt = REPORT_DATA.data_through;
@@ -1732,6 +1839,51 @@ document.querySelectorAll('#recent-auctions-table th').forEach((th) => {
   });
 });
 
+let recentBuybacksSort = { key: 'operation_date', dir: -1 };
+function sortRecentBuybacks(rows) {
+  const { key, dir } = recentBuybacksSort;
+  rows.sort((a, b) => {
+    const av = a[key];
+    const bv = b[key];
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return av.localeCompare(bv) * dir;
+    return (av - bv) * dir;
+  });
+}
+function renderRecentBuybacksTable() {
+  const rows = [...REPORT_DATA.recent_buybacks];
+  sortRecentBuybacks(rows);
+  document.getElementById('recent-buybacks-empty').hidden = rows.length > 0;
+  const tbody = document.getElementById('recent-buybacks-body');
+  tbody.textContent = '';
+  rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    const dateCell = document.createElement('td'); dateCell.textContent = formatDate(r.operation_date);
+    const typeCell = document.createElement('td'); typeCell.className = 'col-text';
+    const dot = document.createElement('span'); dot.className = 'type-dot'; dot.style.background = typeColor(r.type);
+    typeCell.append(dot, document.createTextNode(r.type ?? '—'));
+    const termCell = document.createElement('td'); termCell.className = 'col-text'; termCell.textContent = r.term ?? '—';
+    const amtCell = document.createElement('td'); amtCell.textContent = formatUSD(r.amount, 2);
+    const couponCell = document.createElement('td'); couponCell.textContent = r.coupon_pct == null ? '—' : formatPct(r.coupon_pct);
+    const priceCell = document.createElement('td'); priceCell.textContent = formatPrice(r.price);
+    const maturityCell = document.createElement('td'); maturityCell.textContent = formatDate(r.maturity_date);
+    const cusipCell = document.createElement('td'); cusipCell.className = 'col-text'; cusipCell.textContent = r.cusip;
+    tr.append(dateCell, typeCell, termCell, amtCell, couponCell, priceCell, maturityCell, cusipCell);
+    tbody.appendChild(tr);
+  });
+}
+document.querySelectorAll('#recent-buybacks-table th').forEach((th) => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if (recentBuybacksSort.key === key) recentBuybacksSort.dir *= -1;
+    else recentBuybacksSort = { key, dir: ['operation_date', 'amount', 'coupon_pct', 'price', 'maturity_date'].includes(key) ? -1 : 1 };
+    document.querySelectorAll('#recent-buybacks-table th').forEach((x) => x.classList.remove('sorted'));
+    th.classList.add('sorted');
+    renderRecentBuybacksTable();
+  });
+});
+
 function renderCaveats() {
   const ul = document.getElementById('caveats-list');
   REPORT_DATA.caveats.forEach((c) => {
@@ -1782,11 +1934,14 @@ tableForRateTrend();
 
 tableForIssuanceMix();
 
+tableForBuybacks();
+
 tableForDurationDetail();
 
 renderRefinancingCallout();
 renderTopMaturitiesTable();
 renderRecentAuctionsTable();
+renderRecentBuybacksTable();
 renderCaveats();
 </script>
 </body>
