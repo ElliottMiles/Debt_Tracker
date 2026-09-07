@@ -60,9 +60,24 @@ DURATION_DEFS = [
     ("30 Year", "Bond", "30-Year"),
 ]
 
-# Earliest date TreasuryDirect's structured auction records go back to -- also
-# where the "Show history" sparklines start (see historical_snapshots below).
+# Earliest date TreasuryDirect's structured auction records go back to.
 HISTORY_START = date(1980, 1, 1)
+
+# Where the point-in-time replay charts/sparklines start -- later than
+# HISTORY_START on purpose. A replay snapshot at date D can only "see"
+# securities issued from HISTORY_START onward, so anything issued earlier
+# but still outstanding at D (Notes/Bonds especially, with terms up to 30
+# years) is invisible and understates that D's true composition. That bias
+# is worst right at HISTORY_START (a 1980 snapshot misses a full decade-plus
+# of pre-1980 issuance) and fades as more real post-1980 issuance accumulates
+# to replace it. By ~5 years in, the 2/3/5/7-year Notes that dominate
+# issuance volume have cycled at least once, so the picture is close enough
+# to trustworthy; a much fainter tail (10-Year Notes, 30-Year Bonds) lingers
+# until 2010, but by then it's a rounding error rather than a headline
+# distortion (see the "caveats" list below). Doesn't apply to issuance_mix,
+# which reflects actual issuance in a given year rather than a reconstructed
+# outstanding stock -- see the 1980-only filter on that pivot.
+REPLAY_START = date(1985, 1, 1)
 
 # Every maturity Yield_Curve_History.csv publishes (fetch_yield_curve.py's
 # full MATURITY_ORDER -- same 14 points as CURVE_POINT_DAYS below, in the
@@ -403,11 +418,13 @@ def main():
 
     # ---- debt composition over time: outstanding-by-type, one point-in-time
     # snapshot per calendar year (same issue_date<=D & maturity_date>D replay
-    # used everywhere else in this app). The current year's snapshot is
-    # "today" rather than Jan 1 of this year, so the most recent bar matches
-    # the live numbers elsewhere on the page, without also needing a separate
-    # "today" point that would otherwise duplicate the current year's label. ----
-    composition_years = list(range(HISTORY_START.year, today_date.year))
+    # used everywhere else in this app). Starts at REPLAY_START, not
+    # HISTORY_START -- see REPLAY_START's comment. The current year's
+    # snapshot is "today" rather than Jan 1 of this year, so the most recent
+    # bar matches the live numbers elsewhere on the page, without also
+    # needing a separate "today" point that would otherwise duplicate the
+    # current year's label. ----
+    composition_years = list(range(REPLAY_START.year, today_date.year))
     composition_dates = [pd.Timestamp(year=y, month=1, day=1) for y in composition_years] + [today]
     composition_periods = [str(y) for y in composition_years] + [str(today_date.year)]
 
@@ -435,8 +452,14 @@ def main():
     historical_rates = [round(float(wr / w), 3) for w, wr in zip(m["w"], m["wr"])]
 
     # ---- issuance mix: $ issued per year, by type, full history ----
+    # Grouped by auction_date, not issue_date, so a handful of December-1979
+    # Bill auctions (settling in the first days of January 1980, inside the
+    # fetch's issue-date window) land in a "1979" bucket -- a few days of
+    # Bill-only auctions, not a real annual mix, and misleadingly shows as
+    # 100% Bills. Drop anything before HISTORY_START's year; every year from
+    # 1980 onward is a complete calendar year of real auctions.
     df["year"] = df["auction_date"].dt.year
-    issuance_pivot = df.pivot_table(
+    issuance_pivot = df[df["year"] >= HISTORY_START.year].pivot_table(
         index="year", columns="type", values="total_accepted", aggfunc="sum", fill_value=0
     ).reindex(columns=TYPE_ORDER, fill_value=0)
     issuance_periods = [str(y) for y in issuance_pivot.index]
@@ -558,7 +581,8 @@ def main():
     ]
 
     # ---- point-in-time history for the "Show history" tile sparklines ----
-    hist_dates = month_start_dates(HISTORY_START, today_date.replace(day=1))
+    # Starts at REPLAY_START, not HISTORY_START -- see REPLAY_START's comment.
+    hist_dates = month_start_dates(REPLAY_START, today_date.replace(day=1))
     if hist_dates[-1] != today:
         hist_dates.append(today)
     history = historical_snapshots(df, hist_dates)
@@ -641,9 +665,13 @@ def main():
             "The “Refi. rate” column on the maturities table is the same kind of hypothetical, applied per "
             "tranche, using the same par-curve-first, most-recent-auction-otherwise rate described above — "
             "not a prediction of what will actually happen when that security is refinanced.",
-            "The “Show history” sparklines replay each metric using only securities issued by that date. "
-            "History before roughly 2010 understates totals slightly, since debt issued before 1980 (when "
-            "this dataset starts) that was still outstanding in the 1980s–2000s isn't captured.",
+            "The “Show history” sparklines and the “Debt Composition Over Time” chart both replay each "
+            "metric using only securities issued from 1980 onward (when this dataset starts), so they begin "
+            "in 1985 rather than 1980 -- any earlier and debt issued before 1980 but still outstanding "
+            "(mostly longer Notes and Bonds) would be invisible to the replay, understating those types and "
+            "overstating Bills' share. That bias is mostly gone by 1985, once the 2/3/5/7-year Notes issued "
+            "since 1980 have cycled through at least once, though a much fainter version lingers for longer-"
+            "dated Notes and Bonds until 2010.",
         ],
     }
 

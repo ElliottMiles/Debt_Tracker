@@ -567,8 +567,9 @@
   <section class="card">
     <h2>Debt Composition Over Time</h2>
     <p class="section-sub">
-      Outstanding marketable debt by security type, one snapshot per year since 1980 (this year's bar is
-      today, not January 1st).
+      Outstanding marketable debt by security type, one snapshot per year since 1985 (this year's bar is
+      today, not January 1st). Starts in 1985, not 1980, to avoid an early skew toward Bills -- see the
+      caveats below.
     </p>
     <div class="chart-view-toggle" id="composition-view-toggle">
       <button type="button" data-view="pct" class="active">%</button>
@@ -1457,7 +1458,7 @@ function renderStatHistoryView(config, viewId) {
   const values = h[view.key].slice(s, e + 1);
 
   const canvas = document.getElementById('chart-stat-history');
-  canvas.setAttribute('aria-label', `Monthly history of ${config.label.toLowerCase()} (${view.label}) since 1980`);
+  canvas.setAttribute('aria-label', `Monthly history of ${config.label.toLowerCase()} (${view.label}) since 1985`);
   if (statHistoryChart) statHistoryChart.destroy();
   statHistoryChart = renderMetricLine(canvas, dates, values, {
     sparse: true,
