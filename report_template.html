@@ -583,7 +583,7 @@
 
   <section class="card">
     <h2>Historical Borrowing Cost</h2>
-    <p class="section-sub">Weighted average rate at issuance, by quarter, across the full auction history.</p>
+    <p class="section-sub">Weighted average rate at issuance, by month, across the full auction history.</p>
     <figure class="chart-figure">
       <canvas id="chart-rate-trend" role="img" aria-label="Line chart of weighted average interest rate at issuance over time"></canvas>
     </figure>
@@ -865,7 +865,7 @@ function renderStackedTypeBar(canvasId, labels, byType, opts = {}) {
 // Single-series line chart. Used for the rate-by-bucket chart (paired below
 // the maturity wall on a matching x-axis -- kept as its own chart, not a
 // second y-axis on the bar chart, since dollars and percent aren't the same
-// scale), the full-history quarterly rate trend, and the stat-tile history
+// scale), the full-history monthly rate trend, and the stat-tile history
 // panel. `canvasOrId` accepts either an element id (charts fixed in the
 // page's HTML) or a canvas element directly (the stat-history panel's
 // canvas is reused across tiles, so it's fetched once by the caller).
@@ -1307,7 +1307,7 @@ function tableForRateByBucket() {
 function tableForRateTrend() {
   const { periods, avg_rate_pct } = REPORT_DATA.historical_rate_trend;
   const rows = periods.map((p, i) => [p, formatPct(avg_rate_pct[i])]);
-  buildSimpleTable('table-rate-trend', ['Quarter', 'Weighted avg rate'], rows);
+  buildSimpleTable('table-rate-trend', ['Month', 'Weighted avg rate'], rows);
 }
 function tableForIssuanceMix() {
   const { periods, by_type } = REPORT_DATA.issuance_mix;

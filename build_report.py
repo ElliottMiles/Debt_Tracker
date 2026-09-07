@@ -425,14 +425,14 @@ def main():
             pct = round(composition_by_type[t][i] / year_total * 100, 2) if year_total else 0.0
             composition_by_type_pct[t].append(pct)
 
-    # ---- historical rate trend: weighted-avg rate at issuance, quarterly, full history ----
+    # ---- historical rate trend: weighted-avg rate at issuance, by month, full history ----
     hist = df[df["effective_rate_pct"].notna()].copy()
-    hist["quarter"] = hist["auction_date"].dt.to_period("Q").astype(str)
+    hist["month"] = hist["auction_date"].dt.to_period("M").astype(str)
     hist["_w"] = hist["total_accepted"]
     hist["_wr"] = hist["total_accepted"] * hist["effective_rate_pct"]
-    q = hist.groupby("quarter").agg(w=("_w", "sum"), wr=("_wr", "sum")).sort_index()
-    historical_periods = q.index.tolist()
-    historical_rates = [round(float(wr / w), 3) for w, wr in zip(q["w"], q["wr"])]
+    m = hist.groupby("month").agg(w=("_w", "sum"), wr=("_wr", "sum")).sort_index()
+    historical_periods = m.index.tolist()
+    historical_rates = [round(float(wr / w), 3) for w, wr in zip(m["w"], m["wr"])]
 
     # ---- issuance mix: $ issued per year, by type, full history ----
     df["year"] = df["auction_date"].dt.year
