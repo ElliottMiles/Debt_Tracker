@@ -1,6 +1,7 @@
 # Generated/fetched data -- regenerable via fetch_auctions.py / build_report.py, not source
 Treasury_Auction_History.xlsx
 Yield_Curve_History.csv
+Treasury_Buyback_History.csv
 Debt_Report.html
 
 # Python virtual environment

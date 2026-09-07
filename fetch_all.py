@@ -30,6 +30,7 @@ from pathlib import Path
 SCRIPTS = [
     "fetch_auctions.py",
     "fetch_yield_curve.py",
+    "fetch_buybacks.py",
 ]
 
 DIR = Path(__file__).resolve().parent
